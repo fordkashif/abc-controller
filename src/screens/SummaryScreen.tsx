@@ -1,6 +1,6 @@
 import React from 'react';
 import type { RoomRecord, PlayerRecord } from '@abc/shared';
-import controllerLogo from '../assets/controller-waiting-room/logo.png';
+import { controllerLogo } from '../assets/controllerTheme';
 import trophyImage from '../assets/gameover/optimized/trophy-clean.png';
 import winnerBadge from '../assets/gameover/optimized/winner-badge.webp';
 import medalSecond from '../assets/gameover/optimized/medal-second.webp';

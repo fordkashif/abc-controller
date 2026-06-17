@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { findRoomByCode, joinRoom } from '../firebase/roomActions';
 import type { RoomRecord } from '@abc/shared';
 import step1Star from '../assets/controller-two-step/step1/optimized/decor.webp';
@@ -42,20 +42,6 @@ const avatars = [
   { id: 'Star', src: avatarStar },
 ];
 
-const step2PrefetchAssets = [
-  step2Background,
-  step2Star,
-  step2Bubble,
-  step2GreenSquiggle,
-  step2PinkSquiggle,
-  step2CyanTile,
-  step2PinkTile,
-  step2Sparkle,
-  step2Logo,
-  personIcon,
-  ...avatars.map(item => item.src),
-];
-
 export default function JoinScreen({ initialCode, userId, onJoined }: Props) {
   const [step, setStep] = useState<1 | 2>(1);
   const [code, setCode] = useState(initialCode);
@@ -65,14 +51,6 @@ export default function JoinScreen({ initialCode, userId, onJoined }: Props) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [roomMatch, setRoomMatch] = useState<{ id: string; room: RoomRecord } | null>(null);
-
-  useEffect(() => {
-    step2PrefetchAssets.forEach(src => {
-      const image = new Image();
-      image.decoding = 'async';
-      image.src = src;
-    });
-  }, []);
 
   async function handleContinue() {
     const trimCode = code.trim().toUpperCase();

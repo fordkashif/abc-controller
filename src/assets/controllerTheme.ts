@@ -1,0 +1,9 @@
+export { default as controllerBackground } from './controller-two-step/step2/optimized/background.webp';
+export { default as controllerLogo } from './controller-two-step/step2/optimized/logo.webp';
+export { default as controllerDecorMain } from './controller-two-step/step2/optimized/decor.webp';
+export { default as controllerDecorBubble } from './controller-two-step/step2/optimized/decor-2.webp';
+export { default as controllerDecorGreenSquiggle } from './controller-two-step/step2/optimized/decor-3.webp';
+export { default as controllerDecorPinkSquiggle } from './controller-two-step/step2/optimized/decor-4.webp';
+export { default as controllerDecorCyanTile } from './controller-two-step/step2/optimized/decor-5.webp';
+export { default as controllerDecorPinkTile } from './controller-two-step/step2/optimized/decor-6.webp';
+export { default as controllerDecorSparkle } from './controller-two-step/step2/optimized/decor-7.webp';

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { Suspense, lazy, useEffect, useState } from 'react';
 import { signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 import { auth } from './firebase/config';
 import { useRoom } from './hooks/useRoom';
@@ -9,12 +9,12 @@ import {
 } from './firebase/roomActions';
 import type { RoomRecord, AnswerCategory } from '@abc/shared';
 
-import JoinScreen      from './screens/JoinScreen';
-import LobbyScreen     from './screens/LobbyScreen';
-import PlayScreen      from './screens/PlayScreen';
-import SubmittedScreen from './screens/SubmittedScreen';
-import ResultsScreen   from './screens/ResultsScreen';
-import SummaryScreen   from './screens/SummaryScreen';
+const JoinScreen = lazy(() => import('./screens/JoinScreen'));
+const LobbyScreen = lazy(() => import('./screens/LobbyScreen'));
+const PlayScreen = lazy(() => import('./screens/PlayScreen'));
+const SubmittedScreen = lazy(() => import('./screens/SubmittedScreen'));
+const ResultsScreen = lazy(() => import('./screens/ResultsScreen'));
+const SummaryScreen = lazy(() => import('./screens/SummaryScreen'));
 
 type Phase = 'auth' | 'join' | 'lobby' | 'playing' | 'submitted' | 'results' | 'summary';
 type StoredControllerSession = {
@@ -27,7 +27,13 @@ type StoredControllerSession = {
 const CONTROLLER_SESSION_KEY = 'abc-controller-session';
 
 function getCodeFromUrl(): string {
-  return new URLSearchParams(window.location.search).get('code') ?? '';
+  return (new URLSearchParams(window.location.search).get('code') ?? '').trim().toUpperCase();
+}
+
+function clearCodeFromUrl() {
+  const nextUrl = new URL(window.location.href);
+  nextUrl.searchParams.delete('code');
+  window.history.replaceState({}, '', `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`);
 }
 
 function readStoredSession(): StoredControllerSession | null {
@@ -55,6 +61,18 @@ function clearStoredSession() {
   localStorage.removeItem(CONTROLLER_SESSION_KEY);
 }
 
+function ControllerLoadingScreen({ label = 'Loading...' }: { label?: string }) {
+  return (
+    <div className="page-center controller-page-loading">
+      <div style={{ fontSize: 52, fontWeight: 900, color: '#58cc02' }}>ABC</div>
+      <div className="wait-dots">
+        <div className="wait-dot" /><div className="wait-dot" /><div className="wait-dot" />
+      </div>
+      <div className="controller-page-loading-label">{label}</div>
+    </div>
+  );
+}
+
 export default function App() {
   const [userId, setUserId]             = useState<string | null>(null);
   const [phase, setPhase]               = useState<Phase>('auth');
@@ -67,6 +85,9 @@ export default function App() {
   const [restoreAttempted, setRestoreAttempted] = useState(false);
   const [browserOnline, setBrowserOnline] = useState(() => navigator.onLine);
   const [silentRejoinAttempted, setSilentRejoinAttempted] = useState(false);
+  const [joinCodePrefill, setJoinCodePrefill] = useState(() => getCodeFromUrl());
+  const [pendingRoomSwitchCode, setPendingRoomSwitchCode] = useState<string | null>(null);
+  const [switchingRoom, setSwitchingRoom] = useState(false);
 
   const { room, players, activePlayers, roomLoaded, playersLoaded } = useRoom(roomId, userId);
 
@@ -98,12 +119,22 @@ export default function App() {
     const stored = readStoredSession();
     setRestoreAttempted(true);
     if (!stored) return;
+    if (joinCodePrefill && joinCodePrefill !== stored.roomCode.toUpperCase()) {
+      setRoomId(stored.roomId);
+      setRoomCode(stored.roomCode);
+      setPlayerName(stored.playerName);
+      setAvatarId(stored.avatarId);
+      setPhase('lobby');
+      setPendingRoomSwitchCode(joinCodePrefill);
+      clearCodeFromUrl();
+      return;
+    }
     setRoomId(stored.roomId);
     setRoomCode(stored.roomCode);
     setPlayerName(stored.playerName);
     setAvatarId(stored.avatarId);
     setPhase('lobby');
-  }, [userId, roomId, restoreAttempted]);
+  }, [userId, roomId, restoreAttempted, joinCodePrefill]);
 
   useEffect(() => {
     if (!roomId || !roomCode || !playerName) return;
@@ -229,7 +260,41 @@ export default function App() {
     setAvatarId(undefined);
     setMyAnswers({});
     setTrackedRound(0);
+    setSilentRejoinAttempted(false);
+    setJoinCodePrefill('');
     setPhase('join');
+  }
+
+  async function handleConfirmRoomSwitch() {
+    const targetCode = pendingRoomSwitchCode;
+    if (!targetCode || switchingRoom) return;
+
+    setSwitchingRoom(true);
+    try {
+      if (roomId && userId) {
+        await leaveActiveGame(roomId, userId);
+      }
+      clearStoredSession();
+      setRoomId(null);
+      setRoomCode(targetCode);
+      setPlayerName('');
+      setAvatarId(undefined);
+      setMyAnswers({});
+      setTrackedRound(0);
+      setSilentRejoinAttempted(false);
+      setJoinCodePrefill(targetCode);
+      setPendingRoomSwitchCode(null);
+      clearCodeFromUrl();
+      setPhase('join');
+    } catch {
+      setSwitchingRoom(false);
+    }
+  }
+
+  function handleCancelRoomSwitch() {
+    setPendingRoomSwitchCode(null);
+    setJoinCodePrefill('');
+    clearCodeFromUrl();
   }
 
   async function doStartGame() {
@@ -276,7 +341,29 @@ export default function App() {
             {connectionBanner}
           </div>
         )}
-        {screen}
+        {pendingRoomSwitchCode && (
+          <div className="controller-play-modal-backdrop" role="presentation">
+            <div className="controller-play-modal" role="dialog" aria-modal="true" aria-labelledby="switch-room-title">
+              <h2 id="switch-room-title">Switch rooms?</h2>
+              <p>
+                You are already in room {roomCode || 'current room'}.
+                <br />
+                Do you want to leave it and join room {pendingRoomSwitchCode} instead?
+              </p>
+              <div className="controller-play-modal-actions">
+                <button type="button" className="controller-play-modal-button secondary" onClick={handleCancelRoomSwitch} disabled={switchingRoom}>
+                  Stay Here
+                </button>
+                <button type="button" className="controller-play-modal-button danger" onClick={() => { void handleConfirmRoomSwitch(); }} disabled={switchingRoom}>
+                  {switchingRoom ? 'Switching...' : 'Join New Room'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+        <Suspense fallback={<ControllerLoadingScreen />}>
+          {screen}
+        </Suspense>
       </>
     );
   }
@@ -284,20 +371,13 @@ export default function App() {
   // ── Render ────────────────────────────────────────────────────────────────
 
   if (phase === 'auth') {
-    return (
-      <div className="page-center">
-        <div style={{ fontSize: 52, fontWeight: 900, color: '#58cc02' }}>ABC</div>
-        <div className="wait-dots">
-          <div className="wait-dot" /><div className="wait-dot" /><div className="wait-dot" />
-        </div>
-      </div>
-    );
+    return <ControllerLoadingScreen label="Starting controller..." />;
   }
 
   if (phase === 'join' || !room || !userId) {
     return withConnectionBanner(
       <JoinScreen
-        initialCode={getCodeFromUrl()}
+        initialCode={joinCodePrefill}
         userId={userId ?? ''}
         onJoined={handleJoined}
       />
@@ -314,6 +394,7 @@ export default function App() {
         playerName={playerName}
         isDealer={isDealer}
         onStart={doStartGame}
+        onLeaveLobby={handleLeaveCurrentGame}
       />
     );
   }

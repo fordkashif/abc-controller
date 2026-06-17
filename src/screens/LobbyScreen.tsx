@@ -1,17 +1,19 @@
 import React, { useState } from 'react';
 import type { RoomRecord, PlayerRecord } from '@abc/shared';
-import backgroundLogo from '../assets/controller-waiting-room/logo.png';
-import bubbleLg from '../assets/controller-waiting-room/decor.png';
-import bubbleSm from '../assets/controller-waiting-room/decor-2.png';
-import bubbleRight from '../assets/controller-waiting-room/decor-3.png';
-import starOne from '../assets/controller-waiting-room/decor-4.png';
-import starTwo from '../assets/controller-waiting-room/decor-5.png';
-import sparkleOne from '../assets/controller-waiting-room/decor-6.png';
-import sparkleTwo from '../assets/controller-waiting-room/decor-7.png';
-import squigglePink from '../assets/controller-waiting-room/decor-8.png';
-import squiggleGreen from '../assets/controller-waiting-room/decor-9.png';
-import blobBlue from '../assets/controller-waiting-room/decor-10.png';
-import blobPink from '../assets/controller-waiting-room/decor-11.png';
+import {
+  controllerLogo as backgroundLogo,
+  controllerDecorMain as bubbleLg,
+  controllerDecorBubble as bubbleSm,
+  controllerDecorBubble as bubbleRight,
+  controllerDecorCyanTile as starOne,
+  controllerDecorCyanTile as starTwo,
+  controllerDecorSparkle as sparkleOne,
+  controllerDecorSparkle as sparkleTwo,
+  controllerDecorPinkSquiggle as squigglePink,
+  controllerDecorGreenSquiggle as squiggleGreen,
+  controllerDecorPinkTile as blobBlue,
+  controllerDecorPinkTile as blobPink,
+} from '../assets/controllerTheme';
 import { CONTROLLER_AVATAR_IMAGES } from '../utils/avatarAssets';
 
 interface Props {
@@ -22,6 +24,7 @@ interface Props {
   playerName: string;
   isDealer: boolean;
   onStart: () => Promise<void>;
+  onLeaveLobby: () => Promise<void>;
 }
 
 const FALLBACK_COLORS = ['#7854dc', '#3094de', '#58cf00', '#f59c16', '#ef3f94', '#7f55e6'];
@@ -53,9 +56,11 @@ function PlayerAvatar({ player, className }: { player: PlayerRecord; className: 
   );
 }
 
-export default function LobbyScreen({ room, roomCode, players, userId, playerName, isDealer, onStart }: Props) {
+export default function LobbyScreen({ room, roomCode, players, userId, playerName, isDealer, onStart, onLeaveLobby }: Props) {
   const [starting, setStarting] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [showLeaveConfirm, setShowLeaveConfirm] = useState(false);
+  const [leaving, setLeaving] = useState(false);
   const me = players.find(player => player.id === userId);
   const myPlayer: PlayerRecord = me ?? {
     name: playerName || 'Player',
@@ -65,8 +70,13 @@ export default function LobbyScreen({ room, roomCode, players, userId, playerNam
     submitted: false,
   };
   const joinedCount = players.length;
+  const minimumPlayers = 2;
+  const playersNeeded = Math.max(0, minimumPlayers - joinedCount);
+  const canStart = joinedCount >= minimumPlayers;
+  const readyLabel = canStart ? `${joinedCount} players ready` : `Need ${playersNeeded} more player${playersNeeded === 1 ? '' : 's'}`;
 
   async function handleStart() {
+    if (!canStart) return;
     setStarting(true);
     try {
       await onStart();
@@ -85,9 +95,40 @@ export default function LobbyScreen({ room, roomCode, players, userId, playerNam
     }
   }
 
+  async function handleConfirmLeave() {
+    if (leaving) return;
+    setLeaving(true);
+    try {
+      await onLeaveLobby();
+    } catch {
+      setLeaving(false);
+      setShowLeaveConfirm(false);
+    }
+  }
+
   return (
     <div className="page join2-page">
       <main className={`waitroom-phone ${isDealer ? 'waitroom-dealer-mode' : 'waitroom-nondealer-mode'}`}>
+        {showLeaveConfirm && (
+          <div className="controller-play-modal-backdrop" role="presentation">
+            <div className="controller-play-modal" role="dialog" aria-modal="true" aria-labelledby="leave-lobby-title">
+              <h2 id="leave-lobby-title">Leave lobby?</h2>
+              <p>
+                You will leave this game on your phone.
+                {players.length <= 2 ? ' The room may end if nobody is left.' : isDealer ? ' Dealer control will move to another player.' : ''}
+              </p>
+              <div className="controller-play-modal-actions">
+                <button type="button" className="controller-play-modal-button secondary" onClick={() => setShowLeaveConfirm(false)} disabled={leaving}>
+                  Stay
+                </button>
+                <button type="button" className="controller-play-modal-button danger" onClick={() => { void handleConfirmLeave(); }} disabled={leaving}>
+                  {leaving ? 'Leaving...' : 'Leave Game'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         <img className="waitroom-decor waitroom-bubble-lg" src={bubbleLg} alt="" aria-hidden="true" />
         <img className="waitroom-decor waitroom-bubble-sm" src={bubbleSm} alt="" aria-hidden="true" />
         <img className="waitroom-decor waitroom-bubble-right" src={bubbleRight} alt="" aria-hidden="true" />
@@ -108,7 +149,7 @@ export default function LobbyScreen({ room, roomCode, players, userId, playerNam
           </h1>
 
           <p className="waitroom-subtitle">
-            {isDealer ? 'Start when everyone is ready.' : 'Waiting for the dealer to start.'}
+            {isDealer ? (canStart ? 'Everyone connected can play now.' : readyLabel) : 'Waiting for the dealer to start.'}
           </p>
 
           <section className="waitroom-glass waitroom-player-hero" aria-label="Your player">
@@ -133,7 +174,7 @@ export default function LobbyScreen({ room, roomCode, players, userId, playerNam
               <div className="waitroom-section-icon"><PlayersIcon /></div>
               <div>
                 <h2 className="waitroom-section-title">Players</h2>
-                <p className="waitroom-section-sub">{joinedCount} joined</p>
+                <p className="waitroom-section-sub">{readyLabel}</p>
               </div>
               <div className="waitroom-mini-avatars">
                 {players.slice(0, 3).map(player => (
@@ -153,13 +194,15 @@ export default function LobbyScreen({ room, roomCode, players, userId, playerNam
                     ) : player.id === userId ? (
                       <span className="waitroom-row-badge you">You</span>
                     ) : (
-                      <span></span>
+                      <span className="waitroom-row-badge ready">Ready</span>
                     )}
                   </div>
                 ))}
               </div>
             ) : (
-              <p className="waitroom-waiting-copy">Waiting for more players...</p>
+              <p className="waitroom-waiting-copy">
+                {canStart ? 'You can start now or invite more players.' : `${readyLabel} before the round can start.`}
+              </p>
             )}
           </section>
 
@@ -176,20 +219,24 @@ export default function LobbyScreen({ room, roomCode, players, userId, playerNam
 
           <div className="waitroom-actions">
             {isDealer ? (
-              <button className="waitroom-primary-button" type="button" onClick={handleStart} disabled={starting}>
+              <button className="waitroom-primary-button" type="button" onClick={handleStart} disabled={starting || !canStart}>
                 <PlayIcon />
-                {starting ? 'STARTING GAME' : 'START GAME'}
+                {starting ? 'STARTING GAME' : canStart ? 'START GAME' : 'WAITING FOR PLAYERS'}
               </button>
             ) : (
               <button className="waitroom-waiting-button" type="button" aria-disabled="true">
                 <ClockIcon />
-                WAITING FOR DEALER
+                {canStart ? 'WAITING FOR DEALER' : readyLabel.toUpperCase()}
               </button>
             )}
 
             <button className="waitroom-secondary-button" type="button" onClick={handleCopyCode}>
               <ShareIcon />
               {copied ? 'CODE COPIED' : 'INVITE PLAYERS'}
+            </button>
+
+            <button className="waitroom-leave-button" type="button" onClick={() => setShowLeaveConfirm(true)}>
+              Leave game
             </button>
           </div>
         </section>

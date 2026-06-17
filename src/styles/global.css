@@ -88,6 +88,12 @@ body {
   gap: 16px;
 }
 
+.controller-page-loading-label {
+  font-size: 15px;
+  font-weight: 700;
+  color: rgba(45, 58, 87, 0.8);
+}
+
 /* ─────────────── ANIMATIONS ─────────────── */
 @keyframes fadeUp {
   from { opacity: 0; transform: translateY(14px); }
@@ -907,7 +913,7 @@ body {
   margin: 0 auto;
   overflow: hidden;
   padding: max(24px, var(--safe-top)) 32px max(24px, var(--safe-bot));
-  background-image: url("../assets/mobile-controller-final/background.png");
+  background-image: url("../assets/controller-two-step/step2/optimized/background.webp");
   background-size: cover;
   background-position: center;
   box-shadow: none;
@@ -1980,7 +1986,7 @@ body {
   padding: max(18px, var(--safe-top)) 28px max(24px, var(--safe-bot));
   background:
     linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.12)),
-    url("../assets/controller-waiting-room/background.png");
+    url("../assets/controller-two-step/step2/optimized/background.webp");
   background-size: cover;
   background-position: center;
   font-family: 'Outfit', ui-rounded, "SF Pro Rounded", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -2292,6 +2298,11 @@ body {
   background: linear-gradient(180deg, #72baff, #3b8ee8);
 }
 
+.waitroom-row-badge.ready {
+  color: #238e2c;
+  background: rgba(232, 255, 232, 0.92);
+}
+
 .waitroom-waiting-copy {
   margin: 16px 0 0;
   color: rgba(49, 60, 88, .78);
@@ -2455,6 +2466,27 @@ body {
   height: 24px;
 }
 
+.waitroom-leave-button {
+  width: fit-content;
+  margin: -2px auto 0;
+  padding: 0 20px;
+  min-height: 46px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: rgba(77, 90, 115, .92);
+  font-size: 17px;
+  line-height: 1;
+  font-weight: 900;
+  letter-spacing: .4px;
+  cursor: pointer;
+  transition: transform .14s ease, opacity .14s ease;
+}
+
+.waitroom-leave-button:active {
+  transform: translateY(2px);
+}
+
 @media (max-width: 390px) {
   .waitroom-phone {
     padding-left: 22px;
@@ -2517,7 +2549,7 @@ body {
   padding: max(18px, var(--safe-top)) 18px max(24px, var(--safe-bot));
   background:
     linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.12)),
-    url("../assets/controller-waiting-room/background.png");
+    url("../assets/controller-two-step/step2/optimized/background.webp");
   background-size: cover;
   background-position: center;
   font-family: 'Outfit', ui-rounded, "SF Pro Rounded", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;

@@ -2,18 +2,20 @@ import React, { useEffect, useRef, useState } from 'react';
 import { requestRoundClose, submitAnswers } from '../firebase/roomActions';
 import type { RoomRecord, PlayerRecord } from '@abc/shared';
 import { ANSWER_KEYS, CATEGORY_LABELS } from '@abc/shared';
-import gameplayLogo from '../assets/controller-waiting-room/logo.png';
-import bubbleLg from '../assets/controller-waiting-room/decor.png';
-import bubbleSm from '../assets/controller-waiting-room/decor-2.png';
-import bubbleRight from '../assets/controller-waiting-room/decor-3.png';
-import starOne from '../assets/controller-waiting-room/decor-4.png';
-import starTwo from '../assets/controller-waiting-room/decor-5.png';
-import sparkleOne from '../assets/controller-waiting-room/decor-6.png';
-import sparkleTwo from '../assets/controller-waiting-room/decor-7.png';
-import squigglePink from '../assets/controller-waiting-room/decor-8.png';
-import squiggleGreen from '../assets/controller-waiting-room/decor-9.png';
-import blobBlue from '../assets/controller-waiting-room/decor-10.png';
-import blobPink from '../assets/controller-waiting-room/decor-11.png';
+import {
+  controllerLogo as gameplayLogo,
+  controllerDecorMain as bubbleLg,
+  controllerDecorBubble as bubbleSm,
+  controllerDecorBubble as bubbleRight,
+  controllerDecorCyanTile as starOne,
+  controllerDecorCyanTile as starTwo,
+  controllerDecorSparkle as sparkleOne,
+  controllerDecorSparkle as sparkleTwo,
+  controllerDecorPinkSquiggle as squigglePink,
+  controllerDecorGreenSquiggle as squiggleGreen,
+  controllerDecorPinkTile as blobBlue,
+  controllerDecorPinkTile as blobPink,
+} from '../assets/controllerTheme';
 
 interface Props {
   room: RoomRecord;
