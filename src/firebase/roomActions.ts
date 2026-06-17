@@ -3,13 +3,16 @@ import {
   doc,
   getDocs,
   getDoc,
-  setDoc,
   updateDoc,
   deleteDoc,
   query,
   where,
+  limit,
   writeBatch,
+  runTransaction,
   serverTimestamp,
+  deleteField,
+  Timestamp,
 } from 'firebase/firestore';
 import { db } from './config';
 import {
@@ -23,6 +26,8 @@ import {
 } from '@abc/shared';
 import type { RoomRecord, PlayerRecord, AnswerCategory } from '@abc/shared';
 
+const ROUND_COUNTDOWN_MS = 3_500;
+
 export async function findRoomByCode(code: string): Promise<{ id: string; room: RoomRecord } | null> {
   const q = query(collection(db, 'rooms'), where('code', '==', code.toUpperCase()));
   const snap = await getDocs(q);
@@ -35,29 +40,42 @@ export async function joinRoom(roomId: string, userId: string, name: string, ava
   const roomRef = doc(db, 'rooms', roomId);
   const roomSnap = await getDoc(roomRef);
   if (!roomSnap.exists()) throw new Error('Room not found');
+  const room = roomSnap.data() as RoomRecord;
 
   const playerRef = doc(db, 'rooms', roomId, 'players', userId);
   const existingSnap = await getDoc(playerRef);
   if (existingSnap.exists()) {
-    await updateDoc(playerRef, { lastSeenAt: serverTimestamp() });
+    await updateDoc(playerRef, {
+      name,
+      avatarId,
+      lastSeenAt: serverTimestamp(),
+      leftAt: deleteField(),
+      connectionState: room.status === 'waiting' ? 'lobby' : 'playing',
+    });
     return;
   }
 
-  // First player becomes the dealer
-  const playersSnap = await getDocs(collection(db, 'rooms', roomId, 'players'));
-  const isFirst = playersSnap.empty;
+  if (room.status !== 'waiting') {
+    throw new Error('This game is already in progress');
+  }
+
+  // We only need to know whether any player exists yet, not load the whole collection.
+  const playersSnap = await getDocs(query(collection(db, 'rooms', roomId, 'players'), limit(1)));
+  const isFirstPlayer = playersSnap.empty;
 
   const batch = writeBatch(db);
   batch.set(playerRef, {
     name,
     avatarId,
     score: 0,
-    isDealer: isFirst,
+    isDealer: isFirstPlayer,
     submitted: false,
     joinedAt: serverTimestamp(),
     lastSeenAt: serverTimestamp(),
+    connectionState: 'lobby',
+    ready: true,
   });
-  if (isFirst) {
+  if (isFirstPlayer) {
     batch.update(roomRef, { currentDealerId: userId });
   }
   await batch.commit();
@@ -77,12 +95,62 @@ export async function leaveRoom(roomId: string, userId: string): Promise<void> {
   } catch { /* best effort */ }
 }
 
+export async function leaveActiveGame(roomId: string, userId: string): Promise<void> {
+  const roomRef = doc(db, 'rooms', roomId);
+  const playerRef = doc(db, 'rooms', roomId, 'players', userId);
+
+  await runTransaction(db, async tx => {
+    const [roomSnap, playerSnap, playersSnap] = await Promise.all([
+      tx.get(roomRef),
+      tx.get(playerRef),
+      getDocs(collection(db, 'rooms', roomId, 'players')),
+    ]);
+
+    if (!roomSnap.exists() || !playerSnap.exists()) return;
+
+    const room = roomSnap.data() as RoomRecord;
+    const players = playersSnap.docs.map(playerDoc => ({
+      id: playerDoc.id,
+      ...(playerDoc.data() as PlayerRecord),
+    }));
+
+    const remaining = players.filter(player => player.id !== userId && !player.leftAt);
+    const nextDealer =
+      remaining.length > 0
+        ? remaining[Math.floor(Math.random() * remaining.length)]
+        : null;
+
+    tx.update(playerRef, {
+      leftAt: serverTimestamp(),
+      connectionState: 'left',
+      lastSeenAt: serverTimestamp(),
+      isDealer: false,
+    });
+
+    if (room.status === 'playing' || room.status === 'round_ended') {
+      if (remaining.length <= 1) {
+        tx.update(roomRef, {
+          status: 'finished',
+          currentDealerId: nextDealer?.id ?? '',
+        });
+      } else if (room.currentDealerId === userId && nextDealer) {
+        tx.update(roomRef, { currentDealerId: nextDealer.id });
+        tx.update(doc(db, 'rooms', roomId, 'players', nextDealer.id), { isDealer: true });
+      }
+    } else if (room.currentDealerId === userId && nextDealer) {
+      tx.update(roomRef, { currentDealerId: nextDealer.id });
+      tx.update(doc(db, 'rooms', roomId, 'players', nextDealer.id), { isDealer: true });
+    }
+  });
+}
+
 export async function startGame(
   roomId: string,
   dealerId: string,
   playerIds: string[],
 ): Promise<void> {
   const firstLetter = selectNextLetter([], 0);
+  const countdownStart = Timestamp.fromMillis(Date.now() + ROUND_COUNTDOWN_MS);
   const batch = writeBatch(db);
 
   playerIds.forEach(pid => {
@@ -91,6 +159,8 @@ export async function startGame(
       answers: { boy: '', girl: '', animal: '', place: '', food: '', thing: '' },
       roundScore: 0,
       scoredRound: 0,
+      ready: true,
+      connectionState: 'playing',
     });
   });
 
@@ -102,7 +172,8 @@ export async function startGame(
     answerOverrides: {},
     roundCloseRequestedAt: null,
     roundNumber: 1,
-    roundStartedAt: serverTimestamp(),
+    roundStartedAt: countdownStart,
+    pausedRemainingSec: null,
   });
 
   await batch.commit();
@@ -219,6 +290,7 @@ export async function advanceRound(
 
   const history = room.letterHistory ?? [];
   const nextLetter = selectNextLetter(history, nextRound - 1);
+  const countdownStart = Timestamp.fromMillis(Date.now() + ROUND_COUNTDOWN_MS);
 
   const batch = writeBatch(db);
   players.forEach(p => {
@@ -226,6 +298,7 @@ export async function advanceRound(
       submitted: false,
       answers: { boy: '', girl: '', animal: '', place: '', food: '', thing: '' },
       roundScore: 0,
+      connectionState: 'playing',
     });
   });
   batch.update(doc(db, 'rooms', roomId), {
@@ -236,7 +309,8 @@ export async function advanceRound(
     letterHistory: [...history, nextLetter],
     answerOverrides: {},
     roundCloseRequestedAt: null,
-    roundStartedAt: serverTimestamp(),
+    roundStartedAt: countdownStart,
+    pausedRemainingSec: null,
   });
 
   await batch.commit();
@@ -244,6 +318,39 @@ export async function advanceRound(
 
 export async function forceEndGame(roomId: string): Promise<void> {
   await updateDoc(doc(db, 'rooms', roomId), { status: 'finished' });
+}
+
+export async function pauseRound(roomId: string, room: RoomRecord): Promise<void> {
+  if (room.status !== 'playing') return;
+
+  const startedAtMs = room.roundStartedAt?.toMillis?.() ?? Date.now();
+  const countdownRemaining = Math.max(0, Math.ceil((startedAtMs - Date.now()) / 1000));
+
+  let remainingSeconds: number;
+  if (countdownRemaining > 0) {
+    remainingSeconds = room.settings.timer + countdownRemaining;
+  } else {
+    const elapsedSeconds = Math.max(0, (Date.now() - startedAtMs) / 1000);
+    remainingSeconds = Math.max(0, Math.ceil(room.settings.timer - elapsedSeconds));
+  }
+
+  await updateDoc(doc(db, 'rooms', roomId), {
+    status: 'paused',
+    pausedRemainingSec: remainingSeconds,
+  });
+}
+
+export async function resumeRound(roomId: string, room: RoomRecord): Promise<void> {
+  if (room.status !== 'paused') return;
+
+  const remainingSeconds = Math.max(0, room.pausedRemainingSec ?? room.settings.timer);
+  const resumedStart = Timestamp.fromMillis(Date.now() - Math.max(0, room.settings.timer - remainingSeconds) * 1000);
+
+  await updateDoc(doc(db, 'rooms', roomId), {
+    status: 'playing',
+    roundStartedAt: resumedStart,
+    pausedRemainingSec: null,
+  });
 }
 
 export async function ensureActiveDealer(

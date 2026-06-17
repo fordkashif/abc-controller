@@ -3,8 +3,9 @@ import { signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 import { auth } from './firebase/config';
 import { useRoom } from './hooks/useRoom';
 import {
-  updateHeartbeat, leaveRoom, startGame,
-  endRound, approveAnswer, advanceRound, forceEndGame, ensureActiveDealer,
+  updateHeartbeat, leaveRoom, leaveActiveGame, startGame,
+  endRound, approveAnswer, advanceRound, forceEndGame, ensureActiveDealer, joinRoom,
+  pauseRound, resumeRound,
 } from './firebase/roomActions';
 import type { RoomRecord, AnswerCategory } from '@abc/shared';
 
@@ -20,6 +21,7 @@ type StoredControllerSession = {
   roomId: string;
   roomCode: string;
   playerName: string;
+  avatarId?: string;
 };
 
 const CONTROLLER_SESSION_KEY = 'abc-controller-session';
@@ -38,6 +40,7 @@ function readStoredSession(): StoredControllerSession | null {
       roomId: parsed.roomId,
       roomCode: parsed.roomCode,
       playerName: parsed.playerName,
+      avatarId: parsed.avatarId,
     };
   } catch {
     return null;
@@ -58,10 +61,12 @@ export default function App() {
   const [roomId, setRoomId]             = useState<string | null>(null);
   const [roomCode, setRoomCode]         = useState('');
   const [playerName, setPlayerName]     = useState('');
+  const [avatarId, setAvatarId]         = useState<string | undefined>(undefined);
   const [myAnswers, setMyAnswers]       = useState<Record<string, string>>({});
   const [trackedRound, setTrackedRound] = useState(0);
   const [restoreAttempted, setRestoreAttempted] = useState(false);
   const [browserOnline, setBrowserOnline] = useState(() => navigator.onLine);
+  const [silentRejoinAttempted, setSilentRejoinAttempted] = useState(false);
 
   const { room, players, activePlayers, roomLoaded, playersLoaded } = useRoom(roomId, userId);
 
@@ -96,6 +101,7 @@ export default function App() {
     setRoomId(stored.roomId);
     setRoomCode(stored.roomCode);
     setPlayerName(stored.playerName);
+    setAvatarId(stored.avatarId);
     setPhase('lobby');
   }, [userId, roomId, restoreAttempted]);
 
@@ -115,6 +121,7 @@ export default function App() {
       setRoomId(null);
       setRoomCode('');
       setPlayerName('');
+      setAvatarId(undefined);
       setMyAnswers({});
       setTrackedRound(0);
       setPhase('join');
@@ -122,20 +129,30 @@ export default function App() {
     }
 
     const stillInRoom = players.some(player => player.id === userId);
-    if (stillInRoom) return;
+    if (stillInRoom) {
+      setSilentRejoinAttempted(false);
+      return;
+    }
+
+    if (browserOnline && !silentRejoinAttempted && playerName) {
+      setSilentRejoinAttempted(true);
+      void joinRoom(roomId, userId, playerName, avatarId).catch(() => {});
+      return;
+    }
 
     const timeout = window.setTimeout(() => {
       clearStoredSession();
       setRoomId(null);
       setRoomCode('');
       setPlayerName('');
+      setAvatarId(undefined);
       setMyAnswers({});
       setTrackedRound(0);
       setPhase('join');
     }, browserOnline ? 8_000 : 15_000);
 
     return () => window.clearTimeout(timeout);
-  }, [roomId, userId, room, players, roomLoaded, playersLoaded, browserOnline]);
+  }, [roomId, userId, room, players, roomLoaded, playersLoaded, browserOnline, silentRejoinAttempted, playerName, avatarId]);
 
   // Auto-end if player count drops below 2 during an active game
   useEffect(() => {
@@ -156,13 +173,14 @@ export default function App() {
   useEffect(() => {
     if (!room || !userId) return;
     const myPlayer = players.find(p => p.id === userId);
+    if (myPlayer?.avatarId) setAvatarId(prev => prev ?? myPlayer.avatarId);
 
     if (room.status === 'waiting') { setPhase('lobby'); return; }
 
-    if (room.status === 'playing') {
+    if (room.status === 'playing' || room.status === 'paused') {
       if (room.roundNumber !== trackedRound) {
         setTrackedRound(room.roundNumber);
-        setMyAnswers({});
+        setMyAnswers(myPlayer?.answers ?? {});
         setPhase('playing');
         return;
       }
@@ -174,11 +192,12 @@ export default function App() {
     if (room.status === 'finished')    { setPhase('summary'); return; }
   }, [room, players, userId, trackedRound]);
 
-  function handleJoined(id: string, r: RoomRecord, name: string) {
+  function handleJoined(id: string, r: RoomRecord, name: string, nextAvatarId: string) {
     setRoomId(id);
     setRoomCode(r.code);
     setPlayerName(name);
-    writeStoredSession({ roomId: id, roomCode: r.code, playerName: name });
+    setAvatarId(nextAvatarId);
+    writeStoredSession({ roomId: id, roomCode: r.code, playerName: name, avatarId: nextAvatarId });
     setPhase(r.status === 'waiting' ? 'lobby' : 'playing');
   }
 
@@ -188,6 +207,21 @@ export default function App() {
     setRoomId(null);
     setRoomCode('');
     setPlayerName('');
+    setAvatarId(undefined);
+    setMyAnswers({});
+    setTrackedRound(0);
+    setPhase('join');
+  }
+
+  async function handleLeaveCurrentGame() {
+    if (roomId && userId) {
+      await leaveActiveGame(roomId, userId);
+    }
+    clearStoredSession();
+    setRoomId(null);
+    setRoomCode('');
+    setPlayerName('');
+    setAvatarId(undefined);
     setMyAnswers({});
     setTrackedRound(0);
     setPhase('join');
@@ -211,6 +245,15 @@ export default function App() {
   async function doAdvance() {
     if (!roomId || !room) return;
     await advanceRound(roomId, room, activePlayers);
+  }
+
+  async function doTogglePause() {
+    if (!roomId || !room) return;
+    if (room.status === 'paused') {
+      await resumeRound(roomId, room);
+      return;
+    }
+    await pauseRound(roomId, room);
   }
 
   const isReconnecting = !!roomId && (!roomLoaded || !playersLoaded || (!!room && !players.some(player => player.id === userId)));
@@ -280,6 +323,8 @@ export default function App() {
         isDealer={isDealer}
         onSubmitted={(ans) => { setMyAnswers(ans); setPhase('submitted'); }}
         onEndRound={doEndRound}
+        onLeaveGame={handleLeaveCurrentGame}
+        onTogglePause={doTogglePause}
       />
     );
   }
@@ -314,7 +359,7 @@ export default function App() {
     return withConnectionBanner(
       <SummaryScreen
         room={room}
-        players={activePlayers}
+        players={players}
         userId={userId}
         isDealer={isDealer}
         onPlayAgain={handlePlayAgain}

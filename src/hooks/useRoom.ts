@@ -10,6 +10,12 @@ function isFreshTimestamp(ts?: { toMillis: () => number }) {
   return Date.now() - ts.toMillis() <= PLAYER_STALE_MS;
 }
 
+function isActivePlayer(player: PlayerRecord & { id: string }, userId?: string | null) {
+  if (player.leftAt) return false;
+  if (player.id === userId) return true;
+  return isFreshTimestamp(player.lastSeenAt);
+}
+
 export function useRoom(roomId: string | null, userId?: string | null) {
   const [room, setRoom]       = useState<RoomRecord | null>(null);
   const [players, setPlayers] = useState<(PlayerRecord & { id: string })[]>([]);
@@ -41,7 +47,7 @@ export function useRoom(roomId: string | null, userId?: string | null) {
     return () => { unsub1(); unsub2(); };
   }, [roomId]);
 
-  const activePlayers = players.filter(player => player.id === userId || isFreshTimestamp(player.lastSeenAt));
+  const activePlayers = players.filter(player => isActivePlayer(player, userId));
 
   return { room, players, activePlayers, roomLoaded, playersLoaded };
 }

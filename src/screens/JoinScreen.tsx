@@ -30,7 +30,7 @@ import avatarStar from '../assets/controller-two-step/step2/optimized/asset-6.we
 interface Props {
   initialCode: string;
   userId: string;
-  onJoined: (roomId: string, room: RoomRecord, name: string) => void;
+  onJoined: (roomId: string, room: RoomRecord, name: string, avatarId: string) => void;
 }
 
 const avatars = [
@@ -108,7 +108,7 @@ export default function JoinScreen({ initialCode, userId, onJoined }: Props) {
       if (!result) { setError('Room not found - check the code and try again'); setStep(1); return; }
       if (result.room.status === 'finished') { setError('That game has already ended'); return; }
       await joinRoom(result.id, userId, trimName, avatar);
-      onJoined(result.id, result.room, trimName);
+      onJoined(result.id, result.room, trimName, avatar);
     } catch {
       setError('Something went wrong. Try again.');
     } finally {

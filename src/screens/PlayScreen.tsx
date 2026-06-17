@@ -23,14 +23,17 @@ interface Props {
   isDealer: boolean;
   onSubmitted: (answers: Record<string, string>) => void;
   onEndRound: () => Promise<void>;
+  onLeaveGame: () => Promise<void>;
 }
 
-export default function PlayScreen({ room, roomId, userId, players, isDealer, onSubmitted, onEndRound }: Props) {
+export default function PlayScreen({ room, roomId, userId, players, isDealer, onSubmitted, onEndRound, onLeaveGame }: Props) {
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [timeLeft, setTimeLeft] = useState(room.settings.timer);
   const [submitting, setSubmitting] = useState(false);
   const [ending, setEnding] = useState(false);
   const [urgent, setUrgent] = useState(false);
+  const [showLeaveConfirm, setShowLeaveConfirm] = useState(false);
+  const [leaving, setLeaving] = useState(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const autoEndRef = useRef<number | null>(null);
   const requestedCloseRef = useRef(false);
@@ -119,6 +122,17 @@ export default function PlayScreen({ room, roomId, userId, players, isDealer, on
     }
   }
 
+  async function handleConfirmLeave() {
+    if (leaving) return;
+    setLeaving(true);
+    try {
+      await onLeaveGame();
+    } catch {
+      setLeaving(false);
+      setShowLeaveConfirm(false);
+    }
+  }
+
   const filledCount = Object.values(answers).filter(value => value.trim()).length;
   const submittedCount = players.filter(player => player.submitted).length;
   const allSubmitted = submittedCount >= players.length && players.length > 0;
@@ -126,6 +140,26 @@ export default function PlayScreen({ room, roomId, userId, players, isDealer, on
   return (
     <div className="page join2-page">
       <main className={`controller-play ${urgent ? 'urgent' : ''}`}>
+        {showLeaveConfirm && (
+          <div className="controller-play-modal-backdrop" role="presentation">
+            <div className="controller-play-modal" role="dialog" aria-modal="true" aria-labelledby="leave-game-title">
+              <h2 id="leave-game-title">Leave game?</h2>
+              <p>
+                You will leave this game on your phone.
+                {players.length <= 2 ? ' The game will end and final scores will be shown.' : isDealer ? ' Dealer control will move to another player.' : ''}
+              </p>
+              <div className="controller-play-modal-actions">
+                <button type="button" className="controller-play-modal-button secondary" onClick={() => setShowLeaveConfirm(false)} disabled={leaving}>
+                  Stay
+                </button>
+                <button type="button" className="controller-play-modal-button danger" onClick={() => { void handleConfirmLeave(); }} disabled={leaving}>
+                  {leaving ? 'Leaving...' : 'Leave Game'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         <img className="controller-play-decor controller-play-bubble-lg" src={bubbleLg} alt="" aria-hidden="true" />
         <img className="controller-play-decor controller-play-bubble-sm" src={bubbleSm} alt="" aria-hidden="true" />
         <img className="controller-play-decor controller-play-bubble-right" src={bubbleRight} alt="" aria-hidden="true" />
@@ -140,7 +174,7 @@ export default function PlayScreen({ room, roomId, userId, players, isDealer, on
 
         <section className="controller-play-content">
           <header className="controller-play-topbar">
-            <button className="controller-play-back" type="button" aria-label="Back" disabled>
+            <button className="controller-play-back" type="button" aria-label="Leave game" onClick={() => setShowLeaveConfirm(true)}>
               <ChevronLeftIcon />
             </button>
             <img className="controller-play-logo" src={gameplayLogo} alt="ABC Fast or Slow" />
