@@ -23,12 +23,14 @@ interface Props {
   onEndRound: () => Promise<void>;
 }
 
-export default function SubmittedScreen({ players, myAnswers, isDealer, onEndRound }: Props) {
+export default function SubmittedScreen({ room, players, myAnswers, isDealer, onEndRound }: Props) {
   const [ending, setEnding] = useState(false);
   const submittedCount = players.filter(player => player.submitted).length;
   const total = players.length;
   const allSubmitted = submittedCount >= total && total > 0;
   const waitingCount = Math.max(0, total - submittedCount);
+  const roundClosing = !!room.roundCloseRequestedAt;
+
   async function handleEndRound() {
     if (ending) return;
     setEnding(true);
@@ -70,7 +72,7 @@ export default function SubmittedScreen({ players, myAnswers, isDealer, onEndRou
             <h1 className="controller-submitted-title">Answers in!</h1>
             <div className="controller-submitted-copy-pill">
               <PeopleIcon />
-              <span>{submittedCount}/{total} players submitted</span>
+              <span>{allSubmitted ? 'Everyone submitted' : `${submittedCount}/${total} players submitted`}</span>
             </div>
           </section>
 
@@ -83,7 +85,7 @@ export default function SubmittedScreen({ players, myAnswers, isDealer, onEndRou
                   <div key={key} className="controller-submitted-row">
                     <span className="controller-submitted-label">{CATEGORY_LABELS[key] ?? key}</span>
                     <span className={`controller-submitted-value${value ? ' filled' : ' empty'}`}>
-                      {value || '—'}
+                      {value || 'blank'}
                     </span>
                     <span className={`controller-submitted-row-check${value ? ' filled' : ''}`} aria-hidden="true">
                       <MiniCheckIcon />
@@ -108,22 +110,24 @@ export default function SubmittedScreen({ players, myAnswers, isDealer, onEndRou
                 disabled={ending}
               >
                 <FlagIcon />
-                <span>{ending ? 'Scoring…' : 'Score Round'}</span>
+                <span>{ending ? 'Scoring...' : allSubmitted ? 'Score Round' : 'End Round Early'}</span>
               </button>
 
-              {!allSubmitted && (
-                <p className="controller-submitted-helper">
-                  Waiting for {waitingCount} more player{waitingCount === 1 ? '' : 's'}.
-                </p>
-              )}
+              <p className="controller-submitted-helper">
+                {roundClosing
+                  ? 'The round is closing now. Any saved answers are being submitted.'
+                  : allSubmitted
+                    ? 'Everyone is in. You can score the round now.'
+                    : `Waiting for ${waitingCount} more player${waitingCount === 1 ? '' : 's'} before auto-score or manual end.`}
+              </p>
             </section>
           ) : (
             <section className="controller-submitted-footer controller-submitted-footer-waiting">
               <div className="controller-submitted-wait-card">
                 <HourglassIcon />
                 <div>
-                  <strong>Waiting for the dealer</strong>
-                  <span>to score the round…</span>
+                  <strong>{roundClosing ? 'Round closing now' : 'Waiting for the dealer'}</strong>
+                  <span>{roundClosing ? 'Saved answers are being locked in.' : 'to score the round...'}</span>
                 </div>
               </div>
             </section>

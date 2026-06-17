@@ -105,6 +105,11 @@ export default function App() {
     setPhase('lobby');
   }, [userId, roomId, restoreAttempted]);
 
+  useEffect(() => {
+    if (!roomId || !roomCode || !playerName) return;
+    writeStoredSession({ roomId, roomCode, playerName, avatarId });
+  }, [roomId, roomCode, playerName, avatarId]);
+
   // Presence heartbeat
   useEffect(() => {
     if (!roomId || !userId) return;
@@ -157,7 +162,7 @@ export default function App() {
   // Auto-end if player count drops below 2 during an active game
   useEffect(() => {
     if (!room || !roomId || !userId) return;
-    if (room.status !== 'playing' && room.status !== 'round_ended') return;
+    if (room.status !== 'playing' && room.status !== 'paused' && room.status !== 'round_ended') return;
     if (activePlayers.length < 2) {
       forceEndGame(roomId);
     }

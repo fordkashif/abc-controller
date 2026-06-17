@@ -4981,3 +4981,114 @@ body {
     font-size: 15px;
   }
 }
+.controller-play-control-chip {
+  min-width: 86px;
+  height: 42px;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.94);
+  color: #6f45e9;
+  font-size: 14px;
+  font-weight: 800;
+  box-shadow: 0 10px 24px rgba(102, 71, 204, 0.18);
+  cursor: pointer;
+}
+
+.controller-play-control-chip:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.controller-play-state-banner {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 28px;
+  background: rgba(243, 250, 255, 0.58);
+  backdrop-filter: blur(10px);
+}
+
+.controller-play-state-card {
+  width: min(100%, 320px);
+  border-radius: 28px;
+  padding: 24px 22px;
+  text-align: center;
+  background: rgba(255, 255, 255, 0.95);
+  box-shadow: 0 18px 42px rgba(101, 86, 191, 0.22);
+}
+
+.controller-play-state-kicker {
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #7c5df1;
+}
+
+.controller-play-state-title {
+  margin-top: 8px;
+  font-size: 27px;
+  font-weight: 900;
+  color: var(--text);
+}
+
+.controller-play-state-copy {
+  margin: 10px 0 0;
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+.controller-results-review-summary {
+  display: flex;
+  gap: 10px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+
+.controller-results-review-summary span,
+.controller-results-answer-state {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+}
+
+.controller-results-review-summary span {
+  padding: 8px 12px;
+  background: rgba(255, 255, 255, 0.88);
+}
+
+.controller-results-review-summary .accepted,
+.controller-results-answer-state.accepted {
+  color: #1f9a1c;
+  background: #e9ffe4;
+}
+
+.controller-results-review-summary .rejected,
+.controller-results-answer-state.rejected {
+  color: #d64f5c;
+  background: #ffe8ec;
+}
+
+.controller-results-review-summary .blank,
+.controller-results-answer-state.blank {
+  color: #8391a9;
+  background: #eef3fb;
+}
+
+.controller-results-answer-state {
+  min-width: 92px;
+  padding: 8px 10px;
+  margin-left: auto;
+}
+
+.controller-results-answer-row.compact .controller-results-answer-state {
+  min-width: 84px;
+}

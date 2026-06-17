@@ -24,27 +24,76 @@ interface Props {
   onSubmitted: (answers: Record<string, string>) => void;
   onEndRound: () => Promise<void>;
   onLeaveGame: () => Promise<void>;
+  onTogglePause: () => Promise<void>;
 }
 
-export default function PlayScreen({ room, roomId, userId, players, isDealer, onSubmitted, onEndRound, onLeaveGame }: Props) {
-  const [answers, setAnswers] = useState<Record<string, string>>({});
+const EMPTY_ANSWERS: Record<string, string> = {
+  boy: '',
+  girl: '',
+  animal: '',
+  place: '',
+  food: '',
+  thing: '',
+};
+
+function draftStorageKey(roomId: string, roundNumber: number) {
+  return `abc-controller-draft:${roomId}:${roundNumber}`;
+}
+
+function normalizeAnswers(source?: Record<string, string>) {
+  return { ...EMPTY_ANSWERS, ...(source ?? {}) };
+}
+
+function readDraft(roomId: string, roundNumber: number) {
+  try {
+    const raw = localStorage.getItem(draftStorageKey(roomId, roundNumber));
+    if (!raw) return null;
+    return normalizeAnswers(JSON.parse(raw) as Record<string, string>);
+  } catch {
+    return null;
+  }
+}
+
+function writeDraft(roomId: string, roundNumber: number, answers: Record<string, string>) {
+  localStorage.setItem(draftStorageKey(roomId, roundNumber), JSON.stringify(answers));
+}
+
+function clearDraft(roomId: string, roundNumber: number) {
+  localStorage.removeItem(draftStorageKey(roomId, roundNumber));
+}
+
+export default function PlayScreen({
+  room,
+  roomId,
+  userId,
+  players,
+  isDealer,
+  onSubmitted,
+  onEndRound,
+  onLeaveGame,
+  onTogglePause,
+}: Props) {
+  const myPlayer = players.find(player => player.id === userId);
+  const [answers, setAnswers] = useState<Record<string, string>>(
+    () => normalizeAnswers(myPlayer?.answers ?? readDraft(roomId, room.roundNumber) ?? EMPTY_ANSWERS),
+  );
   const [timeLeft, setTimeLeft] = useState(room.settings.timer);
   const [submitting, setSubmitting] = useState(false);
   const [ending, setEnding] = useState(false);
+  const [togglingPause, setTogglingPause] = useState(false);
   const [urgent, setUrgent] = useState(false);
   const [showLeaveConfirm, setShowLeaveConfirm] = useState(false);
   const [leaving, setLeaving] = useState(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const autoEndRef = useRef<number | null>(null);
   const requestedCloseRef = useRef(false);
-  const myPlayer = players.find(player => player.id === userId);
 
-  const startedAtMs = room.roundStartedAt
-    ? (room.roundStartedAt as { toMillis: () => number }).toMillis()
-    : null;
-  const roundCloseRequestedAtMs = room.roundCloseRequestedAt
-    ? (room.roundCloseRequestedAt as { toMillis: () => number }).toMillis()
-    : null;
+  const startedAtMs = room.roundStartedAt?.toMillis?.() ?? null;
+  const roundCloseRequestedAtMs = room.roundCloseRequestedAt?.toMillis?.() ?? null;
+  const countdownLeft = startedAtMs ? Math.max(0, Math.ceil((startedAtMs - Date.now()) / 1000)) : 0;
+  const isCountdown = room.status === 'playing' && countdownLeft > 0;
+  const isPaused = room.status === 'paused';
+  const interactionLocked = isCountdown || isPaused || !!myPlayer?.submitted;
 
   useEffect(() => {
     requestedCloseRef.current = false;
@@ -52,16 +101,43 @@ export default function PlayScreen({ room, roomId, userId, players, isDealer, on
       window.clearTimeout(autoEndRef.current);
       autoEndRef.current = null;
     }
-  }, [room.roundNumber]);
+    setAnswers(normalizeAnswers(myPlayer?.answers ?? readDraft(roomId, room.roundNumber) ?? EMPTY_ANSWERS));
+  }, [room.roundNumber, roomId, myPlayer?.answers]);
+
+  useEffect(() => {
+    if (myPlayer?.submitted) {
+      clearDraft(roomId, room.roundNumber);
+      setAnswers(normalizeAnswers(myPlayer.answers));
+    }
+  }, [myPlayer?.submitted, myPlayer?.answers, roomId, room.roundNumber]);
+
+  useEffect(() => {
+    if (myPlayer?.submitted) return;
+    writeDraft(roomId, room.roundNumber, answers);
+  }, [answers, myPlayer?.submitted, roomId, room.roundNumber]);
 
   useEffect(() => {
     const total = room.settings.timer;
 
     async function tick() {
+      if (room.status === 'paused') {
+        const pausedRemaining = Math.max(0, room.pausedRemainingSec ?? total);
+        setTimeLeft(pausedRemaining);
+        setUrgent(pausedRemaining <= 10);
+        return;
+      }
+
       const elapsed = startedAtMs ? (Date.now() - startedAtMs) / 1000 : 0;
+      if (elapsed < 0) {
+        setTimeLeft(total);
+        setUrgent(false);
+        return;
+      }
+
       const remaining = Math.max(0, total - elapsed);
       setTimeLeft(Math.ceil(remaining));
       setUrgent(remaining <= 10);
+
       if (remaining <= 0) {
         if (intervalRef.current) clearInterval(intervalRef.current);
         if (!roundCloseRequestedAtMs && !requestedCloseRef.current) {
@@ -69,7 +145,7 @@ export default function PlayScreen({ room, roomId, userId, players, isDealer, on
           await requestRoundClose(roomId);
         }
         if (!myPlayer?.submitted) {
-          await handleSubmit(true, false);
+          await handleSubmit(false, false);
         }
       }
     }
@@ -79,12 +155,12 @@ export default function PlayScreen({ room, roomId, userId, players, isDealer, on
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
     };
-  }, [startedAtMs, room.settings.timer, myPlayer?.submitted, roundCloseRequestedAtMs, roomId]);
+  }, [startedAtMs, room.settings.timer, myPlayer?.submitted, roundCloseRequestedAtMs, roomId, room.status, room.pausedRemainingSec]);
 
   useEffect(() => {
-    if (!roundCloseRequestedAtMs || myPlayer?.submitted) return;
-    void handleSubmit(true, false);
-  }, [roundCloseRequestedAtMs, myPlayer?.submitted]);
+    if (room.status === 'paused' || !roundCloseRequestedAtMs || myPlayer?.submitted) return;
+    void handleSubmit(false, false);
+  }, [roundCloseRequestedAtMs, myPlayer?.submitted, room.status]);
 
   useEffect(() => {
     if (!isDealer || !roundCloseRequestedAtMs || room.status !== 'playing') return;
@@ -97,11 +173,12 @@ export default function PlayScreen({ room, roomId, userId, players, isDealer, on
     };
   }, [isDealer, roundCloseRequestedAtMs, room.status]);
 
-  async function handleSubmit(auto = false, requestClose = false) {
+  async function handleSubmit(_auto = false, requestClose = false) {
     if (submitting || myPlayer?.submitted) return;
     setSubmitting(true);
     try {
       await submitAnswers(roomId, userId, answers);
+      clearDraft(roomId, room.roundNumber);
       if (requestClose && !requestedCloseRef.current) {
         requestedCloseRef.current = true;
         await requestRoundClose(roomId);
@@ -119,6 +196,16 @@ export default function PlayScreen({ room, roomId, userId, players, isDealer, on
       await onEndRound();
     } catch {
       setEnding(false);
+    }
+  }
+
+  async function handleTogglePause() {
+    if (togglingPause) return;
+    setTogglingPause(true);
+    try {
+      await onTogglePause();
+    } finally {
+      setTogglingPause(false);
     }
   }
 
@@ -140,6 +227,22 @@ export default function PlayScreen({ room, roomId, userId, players, isDealer, on
   return (
     <div className="page join2-page">
       <main className={`controller-play ${urgent ? 'urgent' : ''}`}>
+        {(isCountdown || isPaused) && (
+          <div className="controller-play-state-banner" aria-live="polite">
+            <div className="controller-play-state-card">
+              <div className="controller-play-state-kicker">{isPaused ? 'Round paused' : 'Get ready'}</div>
+              <div className="controller-play-state-title">
+                {isPaused ? 'Waiting for the dealer to resume play' : `Round starts in ${countdownLeft}`}
+              </div>
+              <p className="controller-play-state-copy">
+                {isPaused
+                  ? 'Your answers are safe. The timer is stopped for everyone.'
+                  : `The letter is ${room.currentLetter}. Answers unlock when the countdown ends.`}
+              </p>
+            </div>
+          </div>
+        )}
+
         {showLeaveConfirm && (
           <div className="controller-play-modal-backdrop" role="presentation">
             <div className="controller-play-modal" role="dialog" aria-modal="true" aria-labelledby="leave-game-title">
@@ -178,7 +281,18 @@ export default function PlayScreen({ room, roomId, userId, players, isDealer, on
               <ChevronLeftIcon />
             </button>
             <img className="controller-play-logo" src={gameplayLogo} alt="ABC Fast or Slow" />
-            <div className="controller-play-topbar-spacer" aria-hidden="true" />
+            {isDealer ? (
+              <button
+                className="controller-play-control-chip"
+                type="button"
+                onClick={() => { void handleTogglePause(); }}
+                disabled={togglingPause || !!roundCloseRequestedAtMs}
+              >
+                {togglingPause ? '...' : isPaused ? 'Resume' : 'Pause'}
+              </button>
+            ) : (
+              <div className="controller-play-topbar-spacer" aria-hidden="true" />
+            )}
           </header>
 
           <section className="controller-play-hero">
@@ -193,7 +307,7 @@ export default function PlayScreen({ room, roomId, userId, players, isDealer, on
               <div className="controller-play-timer-card">
                 <TimerIcon />
                 <div className="controller-play-timer-number">{timeLeft}</div>
-                <div className="controller-play-timer-copy">SECS</div>
+                <div className="controller-play-timer-copy">{isPaused ? 'PAUSED' : 'SECS'}</div>
               </div>
             </div>
 
@@ -229,7 +343,7 @@ export default function PlayScreen({ room, roomId, userId, players, isDealer, on
                       autoCorrect="off"
                       autoCapitalize="words"
                       spellCheck={false}
-                      disabled={myPlayer?.submitted}
+                      disabled={interactionLocked}
                     />
                   </label>
                 );
@@ -239,14 +353,16 @@ export default function PlayScreen({ room, roomId, userId, players, isDealer, on
             <div className="controller-play-footer">
               <div className="controller-play-footer-copy">
                 <PeopleIcon />
-                <span>{submittedCount}/{players.length} players submitted</span>
+                <span>
+                  {roundCloseRequestedAtMs ? 'Wrapping up round...' : `${submittedCount}/${players.length} players submitted`}
+                </span>
               </div>
 
               {!myPlayer?.submitted ? (
                 <button
                   className="controller-play-submit"
                   type={isDealer ? 'button' : 'submit'}
-                  disabled={submitting}
+                  disabled={submitting || isCountdown || isPaused}
                   onClick={isDealer ? () => { void handleSubmit(false, true); } : undefined}
                 >
                   {submitting ? 'SUBMITTING ANSWERS' : 'SUBMIT ANSWERS'}
@@ -256,12 +372,18 @@ export default function PlayScreen({ room, roomId, userId, players, isDealer, on
                   className={`controller-play-submit ${allSubmitted ? '' : 'secondary'}`}
                   type="button"
                   onClick={handleEndRound}
-                  disabled={ending}
+                  disabled={ending || isPaused}
                 >
                   {ending ? 'ENDING ROUND' : allSubmitted ? 'SCORE ROUND' : 'END ROUND EARLY'}
                 </button>
               ) : (
-                <div className="controller-play-waiting-note">Submitted. Waiting for dealer to end the round.</div>
+                <div className="controller-play-waiting-note">
+                  {isPaused
+                    ? 'Round paused. Waiting to resume.'
+                    : roundCloseRequestedAtMs
+                      ? 'Round closing now. Wrapping up submissions.'
+                      : 'Submitted. Waiting for dealer to end the round.'}
+                </div>
               )}
             </div>
           </form>

@@ -73,6 +73,19 @@ function RankBadge({ rank }: { rank: number }) {
   return <span className="controller-results-rank-fallback">{rank}</span>;
 }
 
+function getAnswerReviewState(room: RoomRecord, playerId: string, category: AnswerCategory, rawAnswer: string) {
+  const answer = rawAnswer.trim();
+  if (!answer) return { label: 'Blank', tone: 'blank' as const, valid: false };
+
+  const override = room.answerOverrides?.[`${playerId}:${category}`];
+  if (override === true) return { label: 'Accepted', tone: 'accepted' as const, valid: true };
+  if (override === false) return { label: 'Rejected', tone: 'rejected' as const, valid: false };
+
+  const startsRight = answer[0]?.toUpperCase() === room.currentLetter.toUpperCase();
+  if (!startsRight) return { label: 'Wrong letter', tone: 'rejected' as const, valid: false };
+  return { label: 'Accepted', tone: 'accepted' as const, valid: true };
+}
+
 export default function ResultsScreen({ room, players, userId, isDealer, onApprove, onAdvance }: Props) {
   const [advancing, setAdvancing] = useState(false);
   const [overriding, setOverriding] = useState<string | null>(null);
@@ -99,6 +112,20 @@ export default function ResultsScreen({ room, players, userId, isDealer, onAppro
   }, [reviewPlayers.length]);
 
   const currentReviewPlayer = reviewPlayers[currentReviewIndex] ?? reviewPlayers[0];
+  const currentReviewSummary = useMemo(() => {
+    if (!currentReviewPlayer) return { accepted: 0, rejected: 0, blank: 0 };
+
+    return ANSWER_KEYS.reduce(
+      (acc, category) => {
+        const reviewState = getAnswerReviewState(room, currentReviewPlayer.id, category, currentReviewPlayer.answers?.[category] ?? '');
+        if (reviewState.tone === 'accepted') acc.accepted += 1;
+        else if (reviewState.tone === 'blank') acc.blank += 1;
+        else acc.rejected += 1;
+        return acc;
+      },
+      { accepted: 0, rejected: 0, blank: 0 },
+    );
+  }, [currentReviewPlayer, room]);
 
   async function handleApprove(playerId: string, category: AnswerCategory, approved: boolean) {
     const key = `${playerId}:${category}`;
@@ -216,27 +243,33 @@ export default function ResultsScreen({ room, players, userId, isDealer, onAppro
                     <div className="controller-results-review-count">{currentReviewIndex + 1} of {reviewPlayers.length} players</div>
                   </div>
 
+                  <div className="controller-results-review-summary">
+                    <span className="accepted">{currentReviewSummary.accepted} accepted</span>
+                    <span className="rejected">{currentReviewSummary.rejected} rejected</span>
+                    <span className="blank">{currentReviewSummary.blank} blank</span>
+                  </div>
+
                   <section className="controller-results-answers-card">
                     <div className="controller-results-card-heading">REVIEW ANSWERS</div>
                     <div className="controller-results-answer-list">
                       {ANSWER_KEYS.map(category => {
                         const answer = (currentReviewPlayer.answers?.[category] ?? '').trim();
                         const reviewKey = `${currentReviewPlayer.id}:${category}`;
-                        const override = room.answerOverrides?.[reviewKey];
-                        const startsRight = answer && answer[0]?.toUpperCase() === room.currentLetter.toUpperCase();
-                        const autoValid = !!answer && startsRight;
-                        const isValid = override !== undefined ? override : autoValid;
+                        const reviewState = getAnswerReviewState(room, currentReviewPlayer.id, category, answer);
                         const busy = overriding === reviewKey;
 
                         return (
                           <div key={category} className="controller-results-answer-row">
                             <div className="controller-results-answer-category">{CATEGORY_LABELS[category]}</div>
-                            <div className={`controller-results-answer-value${answer ? '' : ' empty'}${isValid && answer ? ' valid' : ''}`}>
+                            <div className={`controller-results-answer-value${answer ? '' : ' empty'}${reviewState.valid ? ' valid' : ''}`}>
                               {answer || 'blank'}
+                            </div>
+                            <div className={`controller-results-answer-state ${reviewState.tone}`}>
+                              {reviewState.label}
                             </div>
                             <div className="controller-results-answer-actions">
                               <button
-                                className={`controller-results-answer-btn approve${override === true ? ' active' : ''}`}
+                                className={`controller-results-answer-btn approve${reviewState.tone === 'accepted' ? ' active' : ''}`}
                                 type="button"
                                 disabled={busy}
                                 onClick={() => void handleApprove(currentReviewPlayer.id, category, true)}
@@ -245,7 +278,7 @@ export default function ResultsScreen({ room, players, userId, isDealer, onAppro
                                 <CheckIcon />
                               </button>
                               <button
-                                className={`controller-results-answer-btn reject${override === false ? ' active' : ''}`}
+                                className={`controller-results-answer-btn reject${reviewState.tone === 'rejected' ? ' active' : ''}`}
                                 type="button"
                                 disabled={busy}
                                 onClick={() => void handleApprove(currentReviewPlayer.id, category, false)}
@@ -261,12 +294,12 @@ export default function ResultsScreen({ room, players, userId, isDealer, onAppro
 
                     <div className="controller-results-tip">
                       <LightBulbIcon />
-                      <p>All correct answers give full points. Tap X to deduct points.</p>
+                      <p>Green is accepted, red is rejected, blank means no answer. Swipe left or right to move between players.</p>
                     </div>
                   </section>
 
                   <button className="controller-results-next-button" type="button" onClick={handleReviewAction} disabled={advancing}>
-                    <span>{advancing ? 'Loading…' : currentReviewIndex < reviewPlayers.length - 1 ? 'Review Next Player' : isLastRound ? 'See Final Results' : 'Next Round'}</span>
+                    <span>{advancing ? 'Loading...' : currentReviewIndex < reviewPlayers.length - 1 ? 'Review Next Player' : isLastRound ? 'See Final Results' : 'Next Round'}</span>
                     <ArrowRightIcon />
                   </button>
                 </section>
@@ -287,10 +320,12 @@ export default function ResultsScreen({ room, players, userId, isDealer, onAppro
                 <div className="controller-results-answer-list compact">
                   {ANSWER_KEYS.map(category => {
                     const answer = (me?.answers?.[category] ?? '').trim();
+                    const reviewState = getAnswerReviewState(room, me?.id ?? userId, category, answer);
                     return (
                       <div key={category} className="controller-results-answer-row compact">
                         <div className="controller-results-answer-category">{CATEGORY_LABELS[category]}</div>
-                        <div className={`controller-results-answer-value${answer ? ' valid' : ' empty'}`}>{answer || 'blank'}</div>
+                        <div className={`controller-results-answer-value${reviewState.valid ? ' valid' : answer ? '' : ' empty'}`}>{answer || 'blank'}</div>
+                        <div className={`controller-results-answer-state ${reviewState.tone}`}>{reviewState.label}</div>
                       </div>
                     );
                   })}
@@ -318,7 +353,7 @@ export default function ResultsScreen({ room, players, userId, isDealer, onAppro
                 <LockIcon />
                 <div>
                   <h3>Waiting for dealer...</h3>
-                  <p>Please hang tight!</p>
+                  <p>Accepted and rejected answers will update here before the next round starts.</p>
                 </div>
               </section>
             </>
