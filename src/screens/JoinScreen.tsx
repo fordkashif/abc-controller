@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { Suspense, lazy, useState } from 'react';
 import { findRoomByCode, joinRoom } from '../firebase/roomActions';
 import type { RoomRecord } from '@abc/shared';
 import step1Star from '../assets/controller-two-step/step1/optimized/decor.webp';
@@ -10,22 +10,6 @@ import step1PinkTile from '../assets/controller-two-step/step1/optimized/decor-6
 import step1Sparkle from '../assets/controller-two-step/step1/optimized/decor-7.webp';
 import step1Logo from '../assets/controller-two-step/step1/optimized/emblem-logo.webp';
 import step1RoomIcon from '../assets/controller-two-step/step1/optimized/icon-pill.webp';
-import step2Background from '../assets/controller-two-step/step2/optimized/background.webp';
-import step2Star from '../assets/controller-two-step/step2/optimized/decor.webp';
-import step2Bubble from '../assets/controller-two-step/step2/optimized/decor-2.webp';
-import step2GreenSquiggle from '../assets/controller-two-step/step2/optimized/decor-3.webp';
-import step2PinkSquiggle from '../assets/controller-two-step/step2/optimized/decor-4.webp';
-import step2CyanTile from '../assets/controller-two-step/step2/optimized/decor-5.webp';
-import step2PinkTile from '../assets/controller-two-step/step2/optimized/decor-6.webp';
-import step2Sparkle from '../assets/controller-two-step/step2/optimized/decor-7.webp';
-import step2Logo from '../assets/controller-two-step/step2/optimized/logo.webp';
-import personIcon from '../assets/controller-two-step/step2/optimized/person-icon.webp';
-import avatarDino from '../assets/controller-two-step/step2/optimized/asset.webp';
-import avatarCat from '../assets/controller-two-step/step2/optimized/asset-2.webp';
-import avatarPuppy from '../assets/controller-two-step/step2/optimized/asset-3.webp';
-import avatarRobot from '../assets/controller-two-step/step2/optimized/asset-4.webp';
-import avatarUnicorn from '../assets/controller-two-step/step2/optimized/asset-5.webp';
-import avatarStar from '../assets/controller-two-step/step2/optimized/asset-6.webp';
 
 interface Props {
   initialCode: string;
@@ -33,20 +17,13 @@ interface Props {
   onJoined: (roomId: string, room: RoomRecord, name: string, avatarId: string) => void;
 }
 
-const avatars = [
-  { id: 'Dino', src: avatarDino },
-  { id: 'Cat', src: avatarCat },
-  { id: 'Puppy', src: avatarPuppy },
-  { id: 'Robot', src: avatarRobot },
-  { id: 'Unicorn', src: avatarUnicorn },
-  { id: 'Star', src: avatarStar },
-];
+const JoinStepTwo = lazy(() => import('./JoinStepTwo'));
 
 export default function JoinScreen({ initialCode, userId, onJoined }: Props) {
   const [step, setStep] = useState<1 | 2>(1);
   const [code, setCode] = useState(initialCode);
   const [name, setName] = useState('');
-  const [avatar, setAvatar] = useState(avatars[0].id);
+  const [avatar, setAvatar] = useState('Dino');
   const [checking, setChecking] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -168,79 +145,48 @@ export default function JoinScreen({ initialCode, userId, onJoined }: Props) {
           </section>
         </main>
       ) : (
-        <main className="join2-controller join2-step2" style={{ backgroundImage: `url(${step2Background})` }}>
-          <DecorSet
-            star={step2Star}
-            bubble={step2Bubble}
-            greenSquiggle={step2GreenSquiggle}
-            pinkSquiggle={step2PinkSquiggle}
-            cyanTile={step2CyanTile}
-            pinkTile={step2PinkTile}
-            sparkle={step2Sparkle}
+        <Suspense fallback={<JoinStepTwoLoading code={code} />}>
+          <JoinStepTwo
+            code={code}
+            name={name}
+            avatar={avatar}
+            error={error}
+            loading={loading}
+            onBack={() => { setStep(1); setError(''); }}
+            onJoin={() => { void handleJoin(); }}
+            onNameChange={value => { setName(value); if (error) setError(''); }}
+            onAvatarChange={setAvatar}
           />
-
-          <section className="join2-content join2-content-step2">
-            <div className="join2-topbar">
-              <button className="join2-back-button" type="button" aria-label="Back" onClick={() => { setStep(1); setError(''); }}>
-                <ChevronLeftIcon />
-              </button>
-              <span className="join2-room-chip">ROOM {code}</span>
-            </div>
-
-            <img className="join2-logo" src={step2Logo} alt="ABC Fast or Slow" />
-
-            <h1 className="join2-headline">Room found!</h1>
-            <p className="join2-subhead">Add your name and pick an avatar.</p>
-
-            <form onSubmit={e => { e.preventDefault(); void handleJoin(); }}>
-              <div>
-                <label className="join2-label" htmlFor="playerName">Your Name</label>
-                <div className="join2-name-field">
-                  <img className="join2-person-icon" src={personIcon} alt="" aria-hidden="true" />
-                  <input
-                    id="playerName"
-                    className="join2-name-input"
-                    type="text"
-                    autoComplete="name"
-                    maxLength={16}
-                    placeholder="Enter your name"
-                    value={name}
-                    onChange={e => { setName(e.target.value); if (error) setError(''); }}
-                  />
-                </div>
-              </div>
-
-              <section className="join2-avatar-section">
-                <h2 className="join2-label">Choose Avatar</h2>
-                <div className="join2-avatar-grid">
-                  {avatars.map(item => (
-                    <button
-                      key={item.id}
-                      className={`join2-avatar-card ${avatar === item.id ? 'selected' : ''}`}
-                      type="button"
-                      aria-label={item.id}
-                      onClick={() => setAvatar(item.id)}
-                    >
-                      <img src={item.src} alt="" aria-hidden="true" />
-                      <span className="join2-avatar-check"><CheckIcon /></span>
-                    </button>
-                  ))}
-                </div>
-              </section>
-
-              {error && <div className="join-error join2-error">{error}</div>}
-
-              <button className="join2-primary join2-join" type="submit" disabled={loading}>
-                {loading ? 'JOINING' : 'JOIN GAME'}
-                <ChevronRightIcon />
-              </button>
-
-              <p className="join2-footer-note">You are joining ABC Fast or Slow - TV Party Game.</p>
-            </form>
-          </section>
-        </main>
+        </Suspense>
       )}
     </div>
+  );
+}
+
+function JoinStepTwoLoading({ code }: { code: string }) {
+  return (
+    <main className="join2-controller join2-step1">
+      <DecorSet
+        star={step1Star}
+        bubble={step1Bubble}
+        greenSquiggle={step1GreenSquiggle}
+        pinkSquiggle={step1PinkSquiggle}
+        cyanTile={step1CyanTile}
+        pinkTile={step1PinkTile}
+        sparkle={step1Sparkle}
+      />
+
+      <section className="join2-content join2-content-step1">
+        <div className="join2-emblem-logo-wrap" aria-label="ABC Fast or Slow">
+          <img className="join2-emblem-logo" src={step1Logo} alt="" aria-hidden="true" />
+        </div>
+        <h1 className="join2-headline">Room found!</h1>
+        <p className="join2-subhead">Loading name and avatar choices for room {code}.</p>
+        <div className="wait-dots" aria-hidden="true">
+          <div className="wait-dot" /><div className="wait-dot" /><div className="wait-dot" />
+        </div>
+      </section>
+    </main>
   );
 }
 
@@ -279,22 +225,6 @@ function ChevronRightIcon() {
   return (
     <svg viewBox="0 0 64 64" aria-hidden="true">
       <path d="M25 16l16 16-16 16" fill="none" stroke="currentColor" strokeWidth="8" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
-
-function ChevronLeftIcon() {
-  return (
-    <svg viewBox="0 0 64 64" aria-hidden="true">
-      <path d="M39 16L23 32l16 16" fill="none" stroke="currentColor" strokeWidth="8" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
-
-function CheckIcon() {
-  return (
-    <svg viewBox="0 0 64 64" aria-hidden="true">
-      <path d="M18 33l9 9 19-22" fill="none" stroke="currentColor" strokeWidth="7" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }

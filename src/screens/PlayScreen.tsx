@@ -89,6 +89,7 @@ export default function PlayScreen({
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const autoEndRef = useRef<number | null>(null);
   const requestedCloseRef = useRef(false);
+  const initializedRoundRef = useRef<string>('');
 
   const startedAtMs = room.roundStartedAt?.toMillis?.() ?? null;
   const roundCloseRequestedAtMs = room.roundCloseRequestedAt?.toMillis?.() ?? null;
@@ -98,18 +99,27 @@ export default function PlayScreen({
   const interactionLocked = isCountdown || isPaused || !!myPlayer?.submitted;
 
   useEffect(() => {
+    const roundKey = `${roomId}:${room.roundNumber}`;
+    if (initializedRoundRef.current === roundKey) return;
+
+    initializedRoundRef.current = roundKey;
     requestedCloseRef.current = false;
+    setSubmitting(false);
+    setEnding(false);
+
     if (autoEndRef.current) {
       window.clearTimeout(autoEndRef.current);
       autoEndRef.current = null;
     }
+
     setAnswers(normalizeAnswers(myPlayer?.answers ?? readDraft(roomId, room.roundNumber) ?? EMPTY_ANSWERS));
   }, [room.roundNumber, roomId, myPlayer?.answers]);
 
   useEffect(() => {
     if (myPlayer?.submitted) {
       clearDraft(roomId, room.roundNumber);
-      setAnswers(normalizeAnswers(myPlayer.answers));
+      setAnswers(prev => normalizeAnswers(myPlayer.answers ?? prev));
+      setSubmitting(false);
     }
   }, [myPlayer?.submitted, myPlayer?.answers, roomId, room.roundNumber]);
 
@@ -178,14 +188,15 @@ export default function PlayScreen({
   async function handleSubmit(_auto = false, requestClose = false) {
     if (submitting || myPlayer?.submitted) return;
     setSubmitting(true);
+    const submittedAnswers = normalizeAnswers(answers);
     try {
-      await submitAnswers(roomId, userId, answers);
+      await submitAnswers(roomId, userId, submittedAnswers);
       clearDraft(roomId, room.roundNumber);
       if (requestClose && !requestedCloseRef.current) {
         requestedCloseRef.current = true;
         await requestRoundClose(roomId);
       }
-      onSubmitted(answers);
+      onSubmitted(submittedAnswers);
     } catch {
       setSubmitting(false);
     }

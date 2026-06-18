@@ -29,7 +29,7 @@ import type { RoomRecord, PlayerRecord, AnswerCategory } from '@abc/shared';
 const ROUND_COUNTDOWN_MS = 3_500;
 
 export async function findRoomByCode(code: string): Promise<{ id: string; room: RoomRecord } | null> {
-  const q = query(collection(db, 'rooms'), where('code', '==', code.toUpperCase()));
+  const q = query(collection(db, 'rooms'), where('code', '==', code.toUpperCase()), limit(1));
   const snap = await getDocs(q);
   if (snap.empty) return null;
   const docSnap = snap.docs[0];
@@ -38,47 +38,54 @@ export async function findRoomByCode(code: string): Promise<{ id: string; room: 
 
 export async function joinRoom(roomId: string, userId: string, name: string, avatarId?: string): Promise<void> {
   const roomRef = doc(db, 'rooms', roomId);
-  const roomSnap = await getDoc(roomRef);
-  if (!roomSnap.exists()) throw new Error('Room not found');
-  const room = roomSnap.data() as RoomRecord;
-
   const playerRef = doc(db, 'rooms', roomId, 'players', userId);
-  const existingSnap = await getDoc(playerRef);
-  if (existingSnap.exists()) {
-    await updateDoc(playerRef, {
+
+  await runTransaction(db, async tx => {
+    const [roomSnap, existingSnap] = await Promise.all([
+      tx.get(roomRef),
+      tx.get(playerRef),
+    ]);
+
+    if (!roomSnap.exists()) {
+      throw new Error('Room not found');
+    }
+
+    const room = roomSnap.data() as RoomRecord;
+    const shouldBeLobby = room.status === 'waiting';
+
+    if (existingSnap.exists()) {
+      tx.update(playerRef, {
+        name,
+        avatarId,
+        lastSeenAt: serverTimestamp(),
+        leftAt: deleteField(),
+        connectionState: shouldBeLobby ? 'lobby' : 'playing',
+      });
+      return;
+    }
+
+    if (!shouldBeLobby) {
+      throw new Error('This game is already in progress');
+    }
+
+    const isFirstPlayer = !room.currentDealerId;
+
+    tx.set(playerRef, {
       name,
       avatarId,
+      score: 0,
+      isDealer: isFirstPlayer,
+      submitted: false,
+      joinedAt: serverTimestamp(),
       lastSeenAt: serverTimestamp(),
-      leftAt: deleteField(),
-      connectionState: room.status === 'waiting' ? 'lobby' : 'playing',
+      connectionState: 'lobby',
+      ready: true,
     });
-    return;
-  }
 
-  if (room.status !== 'waiting') {
-    throw new Error('This game is already in progress');
-  }
-
-  // We only need to know whether any player exists yet, not load the whole collection.
-  const playersSnap = await getDocs(query(collection(db, 'rooms', roomId, 'players'), limit(1)));
-  const isFirstPlayer = playersSnap.empty;
-
-  const batch = writeBatch(db);
-  batch.set(playerRef, {
-    name,
-    avatarId,
-    score: 0,
-    isDealer: isFirstPlayer,
-    submitted: false,
-    joinedAt: serverTimestamp(),
-    lastSeenAt: serverTimestamp(),
-    connectionState: 'lobby',
-    ready: true,
+    if (isFirstPlayer) {
+      tx.update(roomRef, { currentDealerId: userId });
+    }
   });
-  if (isFirstPlayer) {
-    batch.update(roomRef, { currentDealerId: userId });
-  }
-  await batch.commit();
 }
 
 export async function updateHeartbeat(roomId: string, userId: string): Promise<void> {
