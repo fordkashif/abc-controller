@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { useRoundCues } from '../hooks/useDeviceFeedback';
 import { requestRoundClose, saveDraftAnswers, submitAnswers } from '../firebase/roomActions';
 import type { RoomRecord, PlayerRecord } from '@abc/shared';
 import { ANSWER_KEYS, CATEGORY_LABELS, answersForRound, roundTiming, serverNow } from '@abc/shared';
@@ -85,6 +86,9 @@ export default function PlayScreen({
     () => normalizeAnswers(readDraft(roomId, room.roundNumber) ?? (hasServerAnswers ? myServerAnswers : undefined) ?? EMPTY_ANSWERS),
   );
   const [timeLeft, setTimeLeft] = useState(room.settings.timer);
+  // Tracked in state so the screen re-renders the moment the countdown ends
+  // (timeLeft alone doesn't change then), which is when the start buzz fires.
+  const [phaseNow, setPhaseNow] = useState(() => roundTiming(room, serverNow()).phase);
   const [submitting, setSubmitting] = useState(false);
   const [ending, setEnding] = useState(false);
   const [togglingPause, setTogglingPause] = useState(false);
@@ -107,6 +111,11 @@ export default function PlayScreen({
   const timing = roundTiming(room, serverNow());
   const countdownLeft = timing.countdownLeft;
   const isCountdown = timing.phase === 'countdown';
+  const inputRefs = useRef<Array<HTMLInputElement | null>>([]);
+
+  // Buzz at round start, 10 seconds left and time up. Skipped once this
+  // player has submitted so they aren't nagged while they wait.
+  useRoundCues(`${roomId}:${room.roundNumber}`, phaseNow, timeLeft, !myPlayer?.submitted);
   const isPaused = room.status === 'paused';
   const interactionLocked = isCountdown || isPaused || !!myPlayer?.submitted;
 
@@ -172,6 +181,7 @@ export default function PlayScreen({
     async function tick() {
       const t = roundTiming(room, serverNow());
       setTimeLeft(t.timeLeft);
+      setPhaseNow(t.phase);
       setUrgent(t.phase !== 'countdown' && t.timeLeft <= 10);
 
       if (t.phase === 'over') {
@@ -357,14 +367,27 @@ export default function PlayScreen({
             }}
           >
             <div className="controller-play-answer-list">
-              {ANSWER_KEYS.map(key => {
+              {ANSWER_KEYS.map((key, index) => {
                 const value = answers[key] ?? '';
+                const isLast = index === ANSWER_KEYS.length - 1;
                 return (
                   <label key={key} className={`controller-play-row ${value.trim() ? 'filled' : ''}`}>
                     <span className="controller-play-row-label">{CATEGORY_LABELS[key]}</span>
                     <input
+                      ref={el => { inputRefs.current[index] = el; }}
                       className="controller-play-input"
                       value={value}
+                      enterKeyHint={isLast ? 'done' : 'next'}
+                      onKeyDown={event => {
+                        if (event.key !== 'Enter') return;
+                        // Some Android keyboards send Return while a word suggestion is still open.
+                        if (event.nativeEvent.isComposing) return;
+                        // Return moves to the next category instead of submitting the form.
+                        // On the last one it closes the keyboard; submitting stays a deliberate tap.
+                        event.preventDefault();
+                        if (isLast) event.currentTarget.blur();
+                        else inputRefs.current[index + 1]?.focus();
+                      }}
                       onChange={event => setAnswers(prev => ({ ...prev, [key]: event.target.value }))}
                       placeholder={`Starts with ${room.currentLetter}...`}
                       maxLength={40}
