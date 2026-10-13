@@ -1,0 +1,17 @@
+name: Game tests
+
+# Same checks as abc-screen (unit, Firestore rules, full TV + 2 phones game),
+# run against this controller commit and abc-screen's main branch.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  game:
+    uses: fordkashif/abc-screen/.github/workflows/game-tests.yml@main
+    with:
+      controller_ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      screen_ref: main
