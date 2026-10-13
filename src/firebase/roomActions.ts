@@ -3,6 +3,7 @@ import {
   doc,
   getDocs,
   getDoc,
+  getDocsFromServer,
   updateDoc,
   deleteDoc,
   query,
@@ -18,12 +19,14 @@ import { db } from './config';
 import {
   selectNextLetter,
   answerReviewKey,
-  pointsForCount,
-  scoreRoundAnswers,
+  roundTiming,
+  scoreRoundOnServer,
+  serverNow,
+  syncServerClock,
+  ROUND_COUNTDOWN_MS,
 } from '@abc/shared';
 import type { RoomRecord, PlayerRecord, AnswerCategory } from '@abc/shared';
 
-const ROUND_COUNTDOWN_MS = 3_500;
 
 export async function findRoomByCode(code: string): Promise<{ id: string; room: RoomRecord } | null> {
   const q = query(collection(db, 'rooms'), where('code', '==', code.toUpperCase()), limit(1));
@@ -83,14 +86,6 @@ export async function joinRoom(roomId: string, userId: string, name: string, ava
       tx.update(roomRef, { currentDealerId: userId });
     }
   });
-}
-
-export async function updateHeartbeat(roomId: string, userId: string): Promise<void> {
-  try {
-    await updateDoc(doc(db, 'rooms', roomId, 'players', userId), {
-      lastSeenAt: serverTimestamp(),
-    });
-  } catch { /* best effort */ }
 }
 
 export async function leaveRoom(roomId: string, userId: string): Promise<void> {
@@ -154,13 +149,14 @@ export async function startGame(
   playerIds: string[],
 ): Promise<void> {
   const firstLetter = selectNextLetter([], 0);
-  const countdownStart = Timestamp.fromMillis(Date.now() + ROUND_COUNTDOWN_MS);
+  const countdownStart = Timestamp.fromMillis(serverNow() + ROUND_COUNTDOWN_MS);
   const batch = writeBatch(db);
 
   playerIds.forEach(pid => {
     batch.update(doc(db, 'rooms', roomId, 'players', pid), {
       submitted: false,
       answers: { boy: '', girl: '', animal: '', place: '', food: '', thing: '' },
+      answersRound: 1,
       roundScore: 0,
       scoredRound: 0,
       ready: true,
@@ -183,39 +179,12 @@ export async function startGame(
   await batch.commit();
 }
 
-// ── Scoring helpers ───────────────────────────────────────────────────────────
+// ── Round control ─────────────────────────────────────────────────────────────
+// Ending rounds on time, scoring, replacing a missing dealer and ending
+// abandoned games are handled by the referee in shared/src/referee.ts, which
+// runs on the TV (or on the dealer's phone if the TV goes quiet).
 
-async function scoreRound(
-  roomId: string,
-  room: RoomRecord,
-  players: (PlayerRecord & { id: string })[],
-): Promise<void> {
-  const roundScores = scoreRoundAnswers(room, players, pointsForCount);
-
-  const batch = writeBatch(db);
-  for (const p of players) {
-    const roundScore = roundScores[p.id] ?? 0;
-    const prevRoundScore = p.scoredRound === room.roundNumber ? (p.roundScore ?? 0) : 0;
-    const totalScore = Math.max(0, (p.score ?? 0) - prevRoundScore + roundScore);
-    batch.update(doc(db, 'rooms', roomId, 'players', p.id), {
-      score: totalScore,
-      roundScore,
-      scoredRound: room.roundNumber,
-    });
-  }
-
-  await batch.commit();
-}
-
-export async function endRound(
-  roomId: string,
-  room: RoomRecord,
-  players: (PlayerRecord & { id: string })[],
-): Promise<void> {
-  await scoreRound(roomId, room, players);
-  await updateDoc(doc(db, 'rooms', roomId), { status: 'round_ended', roundCloseRequestedAt: null });
-}
-
+/** Asks the referee to close the round. Phones send their answers when they see this. */
 export async function requestRoundClose(roomId: string): Promise<void> {
   await updateDoc(doc(db, 'rooms', roomId), {
     roundCloseRequestedAt: serverTimestamp(),
@@ -225,18 +194,14 @@ export async function requestRoundClose(roomId: string): Promise<void> {
 export async function approveAnswer(
   roomId: string,
   room: RoomRecord,
-  players: (PlayerRecord & { id: string })[],
   playerId: string,
   category: AnswerCategory,
   approved: boolean,
 ): Promise<void> {
-  const overrides = {
-    ...(room.answerOverrides ?? {}),
-    [answerReviewKey(playerId, category)]: approved,
-  };
-  const updatedRoom = { ...room, answerOverrides: overrides };
-  await updateDoc(doc(db, 'rooms', roomId), { answerOverrides: overrides });
-  await scoreRound(roomId, updatedRoom, players);
+  await updateDoc(doc(db, 'rooms', roomId), {
+    [`answerOverrides.${answerReviewKey(playerId, category)}`]: approved,
+  });
+  await scoreRoundOnServer(db, roomId, room.roundNumber, 'round_ended', false);
 }
 
 export async function advanceRound(
@@ -252,25 +217,28 @@ export async function advanceRound(
   }
 
   // Rotate dealer to next player in join order
-  const sorted = [...players].sort((a, b) => {
-    const aMs = a.joinedAt ? (a.joinedAt as { toMillis: () => number }).toMillis() : 0;
-    const bMs = b.joinedAt ? (b.joinedAt as { toMillis: () => number }).toMillis() : 0;
-    return aMs - bMs;
-  });
+  const sorted = [...players].sort((a, b) => (a.joinedAt?.toMillis?.() ?? 0) - (b.joinedAt?.toMillis?.() ?? 0));
   const curIdx = sorted.findIndex(p => p.id === room.currentDealerId);
   const nextDealer = sorted[(curIdx + 1) % sorted.length];
 
   const history = room.letterHistory ?? [];
   const nextLetter = selectNextLetter(history, nextRound - 1);
-  const countdownStart = Timestamp.fromMillis(Date.now() + ROUND_COUNTDOWN_MS);
+  const countdownStart = Timestamp.fromMillis(serverNow() + ROUND_COUNTDOWN_MS);
+
+  // Reset everyone still in the room, including phones that dropped off, so a
+  // player who reconnects isn't stuck on last round's "submitted" screen.
+  const everyone = await getDocsFromServer(collection(db, 'rooms', roomId, 'players'));
+  const toReset = everyone.docs.filter(d => !(d.data() as PlayerRecord).leftAt);
 
   const batch = writeBatch(db);
-  players.forEach(p => {
+  toReset.forEach(p => {
     batch.update(doc(db, 'rooms', roomId, 'players', p.id), {
       submitted: false,
       answers: { boy: '', girl: '', animal: '', place: '', food: '', thing: '' },
+      answersRound: nextRound,
       roundScore: 0,
       connectionState: 'playing',
+      isDealer: p.id === nextDealer.id,
     });
   });
   batch.update(doc(db, 'rooms', roomId), {
@@ -288,35 +256,25 @@ export async function advanceRound(
   await batch.commit();
 }
 
-export async function forceEndGame(roomId: string): Promise<void> {
-  await updateDoc(doc(db, 'rooms', roomId), { status: 'finished' });
-}
-
 export async function pauseRound(roomId: string, room: RoomRecord): Promise<void> {
   if (room.status !== 'playing') return;
 
-  const startedAtMs = room.roundStartedAt?.toMillis?.() ?? Date.now();
-  const countdownRemaining = Math.max(0, Math.ceil((startedAtMs - Date.now()) / 1000));
-
-  let remainingSeconds: number;
-  if (countdownRemaining > 0) {
-    remainingSeconds = room.settings.timer + countdownRemaining;
-  } else {
-    const elapsedSeconds = Math.max(0, (Date.now() - startedAtMs) / 1000);
-    remainingSeconds = Math.max(0, Math.ceil(room.settings.timer - elapsedSeconds));
-  }
+  const timing = roundTiming(room, serverNow());
+  // Pausing during the countdown would skip it on resume, so only pause a running clock.
+  if (timing.phase !== 'active') return;
 
   await updateDoc(doc(db, 'rooms', roomId), {
     status: 'paused',
-    pausedRemainingSec: remainingSeconds,
+    pausedRemainingSec: timing.timeLeft,
   });
 }
 
 export async function resumeRound(roomId: string, room: RoomRecord): Promise<void> {
   if (room.status !== 'paused') return;
 
-  const remainingSeconds = Math.max(0, room.pausedRemainingSec ?? room.settings.timer);
-  const resumedStart = Timestamp.fromMillis(Date.now() - Math.max(0, room.settings.timer - remainingSeconds) * 1000);
+  const total = room.settings.timer;
+  const remainingSeconds = Math.min(total, Math.max(0, room.pausedRemainingSec ?? total));
+  const resumedStart = Timestamp.fromMillis(serverNow() - (total - remainingSeconds) * 1000);
 
   await updateDoc(doc(db, 'rooms', roomId), {
     status: 'playing',
@@ -325,32 +283,44 @@ export async function resumeRound(roomId: string, room: RoomRecord): Promise<voi
   });
 }
 
-export async function ensureActiveDealer(
-  roomId: string,
-  room: RoomRecord,
-  activePlayers: (PlayerRecord & { id: string })[],
-): Promise<void> {
-  if (!activePlayers.length) return;
-  if (activePlayers.some(player => player.id === room.currentDealerId)) return;
-
-  const sorted = [...activePlayers].sort((a, b) => {
-    const aMs = a.joinedAt ? (a.joinedAt as { toMillis: () => number }).toMillis() : 0;
-    const bMs = b.joinedAt ? (b.joinedAt as { toMillis: () => number }).toMillis() : 0;
-    return aMs - bMs;
-  });
-
-  await updateDoc(doc(db, 'rooms', roomId), {
-    currentDealerId: sorted[0].id,
-  });
-}
-
+/** Final answers. Marks the player as done for this round. */
 export async function submitAnswers(
   roomId: string,
   userId: string,
   answers: Record<string, string>,
+  roundNumber: number,
 ): Promise<void> {
   await updateDoc(doc(db, 'rooms', roomId, 'players', userId), {
     answers,
+    answersRound: roundNumber,
     submitted: true,
   });
+}
+
+/** Saves answers as the player types, so nothing is lost if their phone sleeps or drops off. */
+export async function saveDraftAnswers(
+  roomId: string,
+  userId: string,
+  answers: Record<string, string>,
+  roundNumber: number,
+): Promise<void> {
+  // Only while the round is still open, so a save that was in flight when the
+  // round got scored can't change answers after the fact.
+  const roomRef = doc(db, 'rooms', roomId);
+  const playerRef = doc(db, 'rooms', roomId, 'players', userId);
+  await runTransaction(db, async tx => {
+    const [roomSnap, playerSnap] = await Promise.all([tx.get(roomRef), tx.get(playerRef)]);
+    const room = roomSnap.data() as RoomRecord | undefined;
+    if (!room || room.roundNumber !== roundNumber) return;
+    if (room.status !== 'playing' && room.status !== 'paused') return;
+    if ((playerSnap.data() as PlayerRecord | undefined)?.submitted) return;
+    tx.update(playerRef, { answers, answersRound: roundNumber });
+  });
+}
+
+/** Heartbeat that also keeps this phone's clock in step with the server. */
+export async function updateHeartbeat(roomId: string, userId: string): Promise<void> {
+  try {
+    await syncServerClock(doc(db, 'rooms', roomId, 'players', userId), 'lastSeenAt');
+  } catch { /* best effort */ }
 }

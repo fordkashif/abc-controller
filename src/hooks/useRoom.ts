@@ -1,20 +1,8 @@
 import { useEffect, useState } from 'react';
 import { collection, doc, onSnapshot } from 'firebase/firestore';
 import { db } from '../firebase/config';
+import { activePlayersOf, serverNow } from '@abc/shared';
 import type { RoomRecord, PlayerRecord } from '@abc/shared';
-
-const PLAYER_STALE_MS = 90_000;
-
-function isFreshTimestamp(ts?: { toMillis: () => number }) {
-  if (!ts) return true;
-  return Date.now() - ts.toMillis() <= PLAYER_STALE_MS;
-}
-
-function isActivePlayer(player: PlayerRecord & { id: string }, userId?: string | null) {
-  if (player.leftAt) return false;
-  if (player.id === userId) return true;
-  return isFreshTimestamp(player.lastSeenAt);
-}
 
 export function useRoom(roomId: string | null, userId?: string | null) {
   const [room, setRoom]       = useState<RoomRecord | null>(null);
@@ -47,7 +35,7 @@ export function useRoom(roomId: string | null, userId?: string | null) {
     return () => { unsub1(); unsub2(); };
   }, [roomId]);
 
-  const activePlayers = players.filter(player => isActivePlayer(player, userId));
+  const activePlayers = activePlayersOf(players, serverNow(), userId);
 
   return { room, players, activePlayers, roomLoaded, playersLoaded };
 }

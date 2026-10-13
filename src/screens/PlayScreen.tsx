@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { requestRoundClose, submitAnswers } from '../firebase/roomActions';
+import { requestRoundClose, saveDraftAnswers, submitAnswers } from '../firebase/roomActions';
 import type { RoomRecord, PlayerRecord } from '@abc/shared';
-import { ANSWER_KEYS, CATEGORY_LABELS } from '@abc/shared';
+import { ANSWER_KEYS, CATEGORY_LABELS, answersForRound, roundTiming, serverNow } from '@abc/shared';
 import {
   controllerLogo as gameplayLogo,
   controllerDecorMain as bubbleLg,
@@ -37,6 +37,9 @@ const EMPTY_ANSWERS: Record<string, string> = {
   food: '',
   thing: '',
 };
+
+/** How long to wait after the last keystroke before saving answers to the server. */
+const AUTOSAVE_DELAY_MS = 600;
 
 function draftStorageKey(roomId: string, roundNumber: number) {
   return `abc-controller-draft:${roomId}:${roundNumber}`;
@@ -76,8 +79,10 @@ export default function PlayScreen({
   onTogglePause,
 }: Props) {
   const myPlayer = players.find(player => player.id === userId);
+  const myServerAnswers = myPlayer ? (answersForRound(myPlayer, room.roundNumber) as Record<string, string>) : undefined;
+  const hasServerAnswers = !!myServerAnswers && Object.values(myServerAnswers).some(v => v?.trim());
   const [answers, setAnswers] = useState<Record<string, string>>(
-    () => normalizeAnswers(myPlayer?.answers ?? readDraft(roomId, room.roundNumber) ?? EMPTY_ANSWERS),
+    () => normalizeAnswers(readDraft(roomId, room.roundNumber) ?? (hasServerAnswers ? myServerAnswers : undefined) ?? EMPTY_ANSWERS),
   );
   const [timeLeft, setTimeLeft] = useState(room.settings.timer);
   const [submitting, setSubmitting] = useState(false);
@@ -87,14 +92,21 @@ export default function PlayScreen({
   const [showLeaveConfirm, setShowLeaveConfirm] = useState(false);
   const [leaving, setLeaving] = useState(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const autoEndRef = useRef<number | null>(null);
+  const autosaveRef = useRef<number | null>(null);
+  const autosaveRoundRef = useRef<number | null>(null);
+  // Latest values for code that runs from timers and could otherwise see an
+  // old copy (the clock tick is set up once and lives for the whole round).
+  const answersRef = useRef(answers);
+  answersRef.current = answers;
+  const submittingRef = useRef(false);
   const requestedCloseRef = useRef(false);
   const initializedRoundRef = useRef<string>('');
 
   const startedAtMs = room.roundStartedAt?.toMillis?.() ?? null;
   const roundCloseRequestedAtMs = room.roundCloseRequestedAt?.toMillis?.() ?? null;
-  const countdownLeft = startedAtMs ? Math.max(0, Math.ceil((startedAtMs - Date.now()) / 1000)) : 0;
-  const isCountdown = room.status === 'playing' && countdownLeft > 0;
+  const timing = roundTiming(room, serverNow());
+  const countdownLeft = timing.countdownLeft;
+  const isCountdown = timing.phase === 'countdown';
   const isPaused = room.status === 'paused';
   const interactionLocked = isCountdown || isPaused || !!myPlayer?.submitted;
 
@@ -104,19 +116,22 @@ export default function PlayScreen({
 
     initializedRoundRef.current = roundKey;
     requestedCloseRef.current = false;
+    submittingRef.current = false;
     setSubmitting(false);
     setEnding(false);
 
-    if (autoEndRef.current) {
-      window.clearTimeout(autoEndRef.current);
-      autoEndRef.current = null;
+    if (autosaveRef.current) {
+      window.clearTimeout(autosaveRef.current);
+      autosaveRef.current = null;
     }
 
-    setAnswers(normalizeAnswers(myPlayer?.answers ?? readDraft(roomId, room.roundNumber) ?? EMPTY_ANSWERS));
-  }, [room.roundNumber, roomId, myPlayer?.answers]);
+    setAnswers(normalizeAnswers(readDraft(roomId, room.roundNumber) ?? (hasServerAnswers ? myServerAnswers : undefined) ?? EMPTY_ANSWERS));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [room.roundNumber, roomId]);
 
   useEffect(() => {
     if (myPlayer?.submitted) {
+      submittingRef.current = false;
       clearDraft(roomId, room.roundNumber);
       setAnswers(prev => normalizeAnswers(myPlayer.answers ?? prev));
       setSubmitting(false);
@@ -125,37 +140,42 @@ export default function PlayScreen({
 
   useEffect(() => {
     if (myPlayer?.submitted) return;
+
+    // When the round changes, this effect runs once more with the previous
+    // round's answers still in state. Skip that run; the reset that follows
+    // triggers a fresh one with the right answers.
+    if (autosaveRoundRef.current !== room.roundNumber) {
+      autosaveRoundRef.current = room.roundNumber;
+      return;
+    }
+
     writeDraft(roomId, room.roundNumber, answers);
-  }, [answers, myPlayer?.submitted, roomId, room.roundNumber]);
+
+    // Also save to the server, so the referee can score these answers even if
+    // this phone locks, loses signal or never presses submit.
+    if (autosaveRef.current) window.clearTimeout(autosaveRef.current);
+    const round = room.roundNumber;
+    const snapshot = normalizeAnswers(answers);
+    autosaveRef.current = window.setTimeout(() => {
+      autosaveRef.current = null;
+      void saveDraftAnswers(roomId, userId, snapshot, round).catch(() => { /* retried on next keystroke or submit */ });
+    }, AUTOSAVE_DELAY_MS);
+  }, [answers, myPlayer?.submitted, roomId, userId, room.roundNumber]);
+
+  useEffect(() => () => {
+    if (autosaveRef.current) window.clearTimeout(autosaveRef.current);
+  }, []);
 
   useEffect(() => {
-    const total = room.settings.timer;
-
+    // The referee (normally the TV) ends the round. This only shows the
+    // clock and sends this phone's answers once time is up.
     async function tick() {
-      if (room.status === 'paused') {
-        const pausedRemaining = Math.max(0, room.pausedRemainingSec ?? total);
-        setTimeLeft(pausedRemaining);
-        setUrgent(pausedRemaining <= 10);
-        return;
-      }
+      const t = roundTiming(room, serverNow());
+      setTimeLeft(t.timeLeft);
+      setUrgent(t.phase !== 'countdown' && t.timeLeft <= 10);
 
-      const elapsed = startedAtMs ? (Date.now() - startedAtMs) / 1000 : 0;
-      if (elapsed < 0) {
-        setTimeLeft(total);
-        setUrgent(false);
-        return;
-      }
-
-      const remaining = Math.max(0, total - elapsed);
-      setTimeLeft(Math.ceil(remaining));
-      setUrgent(remaining <= 10);
-
-      if (remaining <= 0) {
+      if (t.phase === 'over') {
         if (intervalRef.current) clearInterval(intervalRef.current);
-        if (!roundCloseRequestedAtMs && !requestedCloseRef.current) {
-          requestedCloseRef.current = true;
-          await requestRoundClose(roomId);
-        }
         if (!myPlayer?.submitted) {
           await handleSubmit(false, false);
         }
@@ -174,23 +194,17 @@ export default function PlayScreen({
     void handleSubmit(false, false);
   }, [roundCloseRequestedAtMs, myPlayer?.submitted, room.status]);
 
-  useEffect(() => {
-    if (!isDealer || !roundCloseRequestedAtMs || room.status !== 'playing') return;
-    if (autoEndRef.current) window.clearTimeout(autoEndRef.current);
-    autoEndRef.current = window.setTimeout(() => {
-      void handleEndRound();
-    }, 1800);
-    return () => {
-      if (autoEndRef.current) window.clearTimeout(autoEndRef.current);
-    };
-  }, [isDealer, roundCloseRequestedAtMs, room.status]);
-
   async function handleSubmit(_auto = false, requestClose = false) {
-    if (submitting || myPlayer?.submitted) return;
+    if (submittingRef.current || myPlayer?.submitted) return;
+    submittingRef.current = true;
     setSubmitting(true);
-    const submittedAnswers = normalizeAnswers(answers);
+    const submittedAnswers = normalizeAnswers(answersRef.current);
     try {
-      await submitAnswers(roomId, userId, submittedAnswers);
+      if (autosaveRef.current) {
+        window.clearTimeout(autosaveRef.current);
+        autosaveRef.current = null;
+      }
+      await submitAnswers(roomId, userId, submittedAnswers, room.roundNumber);
       clearDraft(roomId, room.roundNumber);
       if (requestClose && !requestedCloseRef.current) {
         requestedCloseRef.current = true;
@@ -198,6 +212,7 @@ export default function PlayScreen({
       }
       onSubmitted(submittedAnswers);
     } catch {
+      submittingRef.current = false;
       setSubmitting(false);
     }
   }
@@ -299,7 +314,7 @@ export default function PlayScreen({
                 className="controller-play-control-chip"
                 type="button"
                 onClick={() => { void handleTogglePause(); }}
-                disabled={togglingPause || !!roundCloseRequestedAtMs}
+                disabled={togglingPause || !!roundCloseRequestedAtMs || isCountdown}
               >
                 {togglingPause ? '...' : isPaused ? 'Resume' : 'Pause'}
               </button>
