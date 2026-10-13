@@ -13,12 +13,13 @@ import type { RoomRecord, AnswerCategory } from '@abc/shared';
 
 const JoinScreen = lazy(() => import('./screens/JoinScreen'));
 const LobbyScreen = lazy(() => import('./screens/LobbyScreen'));
+const CallingScreen = lazy(() => import('./screens/CallingScreen'));
 const PlayScreen = lazy(() => import('./screens/PlayScreen'));
 const SubmittedScreen = lazy(() => import('./screens/SubmittedScreen'));
 const ResultsScreen = lazy(() => import('./screens/ResultsScreen'));
 const SummaryScreen = lazy(() => import('./screens/SummaryScreen'));
 
-type Phase = 'auth' | 'join' | 'lobby' | 'playing' | 'submitted' | 'results' | 'summary';
+type Phase = 'auth' | 'join' | 'lobby' | 'calling' | 'playing' | 'submitted' | 'results' | 'summary';
 type StoredControllerSession = {
   roomId: string;
   roomCode: string;
@@ -215,6 +216,7 @@ export default function App() {
     if (myPlayer?.avatarId) setAvatarId(prev => prev ?? myPlayer.avatarId);
 
     if (room.status === 'waiting') { setPhase('lobby'); return; }
+    if (room.status === 'calling') { setPhase('calling'); return; }
 
     if (room.status === 'playing' || room.status === 'paused') {
       if (room.roundNumber !== trackedRound) {
@@ -331,7 +333,7 @@ export default function App() {
 
   // Keep the screen on from the lobby through the final scores, so phones
   // don't dim or lock between rounds.
-  useWakeLock(['lobby', 'playing', 'submitted', 'results'].includes(phase));
+  useWakeLock(['lobby', 'calling', 'playing', 'submitted', 'results'].includes(phase));
 
   const isReconnecting = !!roomId && (!roomLoaded || !playersLoaded || (!!room && !players.some(player => player.id === userId)));
   const connectionBanner = !browserOnline
@@ -402,6 +404,18 @@ export default function App() {
         isDealer={isDealer}
         onStart={doStartGame}
         onLeaveLobby={handleLeaveCurrentGame}
+      />
+    );
+  }
+
+  if (phase === 'calling') {
+    return withConnectionBanner(
+      <CallingScreen
+        room={room}
+        roomId={roomId!}
+        userId={userId}
+        players={activePlayers}
+        isDealer={isDealer}
       />
     );
   }

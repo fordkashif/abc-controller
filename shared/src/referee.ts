@@ -8,6 +8,7 @@ import {
   type Firestore,
 } from 'firebase/firestore';
 import { isClockSynced, serverNow } from './clock';
+import { stopLetterCall } from './letterCall';
 import { pointsForCount } from './constants';
 import { activePlayersOf } from './presence';
 import { answersForRound, decideRefereeAction, type RefereeAction, type RefereePlayer } from './refereeDecision';
@@ -114,6 +115,10 @@ async function runAction(db: Firestore, roomId: string, room: RoomRecord, action
       });
       return;
 
+    case 'autoStop':
+      await stopLetterCall(db, roomId, room.roundNumber, 'auto', serverNow());
+      return;
+
     case 'none':
       return;
   }
@@ -150,7 +155,7 @@ export function useReferee({ db, roomId, room, players, enabled }: RefereeOption
 
       const nowMs = serverNow();
       const activeCount = activePlayersOf(current.players, nowMs).length;
-      if (activeCount >= 2 || !['playing', 'paused', 'round_ended'].includes(current.room.status)) {
+      if (activeCount >= 2 || !['calling', 'playing', 'paused', 'round_ended'].includes(current.room.status)) {
         shortHandedSince.current = null;
       } else if (shortHandedSince.current === null) {
         shortHandedSince.current = nowMs;

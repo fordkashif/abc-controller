@@ -1,3 +1,4 @@
+import { AUTO_STOP_MS } from './letterCall';
 import { activePlayersOf } from './presence';
 import { roundTiming } from './timing';
 import type { PlayerRecord, RoomRecord } from './types';
@@ -13,7 +14,8 @@ export type RefereeAction =
   | { type: 'endGame' }
   | { type: 'reassignDealer'; dealerId: string }
   | { type: 'requestClose' }
-  | { type: 'finalize' };
+  | { type: 'finalize' }
+  | { type: 'autoStop' };
 
 export type RefereePlayer = PlayerRecord & { id: string };
 
@@ -25,7 +27,7 @@ type DecisionInput = {
   shortHandedSinceMs: number | null;
 };
 
-const IN_GAME = new Set(['playing', 'paused', 'round_ended']);
+const IN_GAME = new Set(['calling', 'playing', 'paused', 'round_ended']);
 
 function joinOrder(a: RefereePlayer, b: RefereePlayer) {
   return (a.joinedAt?.toMillis?.() ?? 0) - (b.joinedAt?.toMillis?.() ?? 0);
@@ -58,6 +60,16 @@ export function decideRefereeAction({ room, players, nowMs, shortHandedSinceMs }
 
   if (active.length > 0 && !active.some(p => p.id === room.currentDealerId)) {
     return { type: 'reassignDealer', dealerId: [...active].sort(joinOrder)[0].id };
+  }
+
+  // Nobody hit STOP: stop the alphabet wherever it is so the game keeps moving.
+  if (room.status === 'calling') {
+    const call = room.letterCall;
+    const startMs = call?.startedAt?.toMillis?.();
+    if (call?.speed && startMs !== undefined && !call.letter && nowMs - startMs >= AUTO_STOP_MS) {
+      return { type: 'autoStop' };
+    }
+    return { type: 'none' };
   }
 
   if (room.status !== 'playing' || active.length === 0) return { type: 'none' };

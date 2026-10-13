@@ -17,13 +17,12 @@ import {
 } from 'firebase/firestore';
 import { db } from './config';
 import {
-  selectNextLetter,
   answerReviewKey,
+  EMPTY_LETTER_CALL,
   roundTiming,
   scoreRoundOnServer,
   serverNow,
   syncServerClock,
-  ROUND_COUNTDOWN_MS,
 } from '@abc/shared';
 import type { RoomRecord, PlayerRecord, AnswerCategory } from '@abc/shared';
 
@@ -126,11 +125,11 @@ export async function leaveActiveGame(roomId: string, userId: string): Promise<v
       isDealer: false,
     });
 
-    if (room.status === 'playing' || room.status === 'round_ended') {
+    if (['calling', 'playing', 'paused', 'round_ended'].includes(room.status)) {
       if (remaining.length <= 1) {
         tx.update(roomRef, {
           status: 'finished',
-          currentDealerId: nextDealer?.id ?? '',
+          ...(room.currentDealerId === userId ? { currentDealerId: nextDealer?.id ?? '' } : {}),
         });
       } else if (room.currentDealerId === userId && nextDealer) {
         tx.update(roomRef, { currentDealerId: nextDealer.id });
@@ -148,8 +147,6 @@ export async function startGame(
   dealerId: string,
   playerIds: string[],
 ): Promise<void> {
-  const firstLetter = selectNextLetter([], 0);
-  const countdownStart = Timestamp.fromMillis(serverNow() + ROUND_COUNTDOWN_MS);
   const batch = writeBatch(db);
 
   playerIds.forEach(pid => {
@@ -164,15 +161,17 @@ export async function startGame(
     });
   });
 
+  // The round starts with the fast-or-slow call; the letter comes from whoever hits STOP.
   batch.update(doc(db, 'rooms', roomId), {
-    status: 'playing',
+    status: 'calling',
     currentDealerId: dealerId,
-    currentLetter: firstLetter,
-    letterHistory: [firstLetter],
+    currentLetter: '',
+    letterHistory: [],
+    letterCall: EMPTY_LETTER_CALL,
     answerOverrides: {},
     roundCloseRequestedAt: null,
     roundNumber: 1,
-    roundStartedAt: countdownStart,
+    roundStartedAt: null,
     pausedRemainingSec: null,
   });
 
@@ -221,9 +220,6 @@ export async function advanceRound(
   const curIdx = sorted.findIndex(p => p.id === room.currentDealerId);
   const nextDealer = sorted[(curIdx + 1) % sorted.length];
 
-  const history = room.letterHistory ?? [];
-  const nextLetter = selectNextLetter(history, nextRound - 1);
-  const countdownStart = Timestamp.fromMillis(serverNow() + ROUND_COUNTDOWN_MS);
 
   // Reset everyone still in the room, including phones that dropped off, so a
   // player who reconnects isn't stuck on last round's "submitted" screen.
@@ -242,14 +238,14 @@ export async function advanceRound(
     });
   });
   batch.update(doc(db, 'rooms', roomId), {
-    status: 'playing',
+    status: 'calling',
     currentDealerId: nextDealer.id,
     roundNumber: nextRound,
-    currentLetter: nextLetter,
-    letterHistory: [...history, nextLetter],
+    currentLetter: '',
+    letterCall: EMPTY_LETTER_CALL,
     answerOverrides: {},
     roundCloseRequestedAt: null,
-    roundStartedAt: countdownStart,
+    roundStartedAt: null,
     pausedRemainingSec: null,
   });
 

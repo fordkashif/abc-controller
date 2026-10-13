@@ -111,6 +111,14 @@ export default function PlayScreen({
   const timing = roundTiming(room, serverNow());
   const countdownLeft = timing.countdownLeft;
   const isCountdown = timing.phase === 'countdown';
+  const stoppedBy = room.letterCall?.stoppedBy;
+  const stopLabel = !stoppedBy
+    ? 'Get ready'
+    : stoppedBy === 'auto'
+      ? 'Nobody hit STOP'
+      : stoppedBy === userId
+        ? 'You hit STOP!'
+        : `${players.find(p => p.id === stoppedBy)?.name ?? 'Someone'} hit STOP!`;
   const inputRefs = useRef<Array<HTMLInputElement | null>>([]);
 
   // Buzz at round start, 10 seconds left and time up. Skipped once this
@@ -268,7 +276,7 @@ export default function PlayScreen({
         {(isCountdown || isPaused) && (
           <div className="controller-play-state-banner" aria-live="polite">
             <div className="controller-play-state-card">
-              <div className="controller-play-state-kicker">{isPaused ? 'Round paused' : 'Get ready'}</div>
+              <div className="controller-play-state-kicker">{isPaused ? 'Round paused' : stopLabel}</div>
               <div className="controller-play-state-title">
                 {isPaused ? 'Waiting for the dealer to resume play' : `Round starts in ${countdownLeft}`}
               </div>
