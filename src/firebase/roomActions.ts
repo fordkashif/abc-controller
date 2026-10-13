@@ -17,12 +17,9 @@ import {
 import { db } from './config';
 import {
   selectNextLetter,
-  normalizeAnswer,
-  isValidCategoryAnswer,
-  isObviousGarbageAnswer,
   answerReviewKey,
   pointsForCount,
-  ANSWER_KEYS,
+  scoreRoundAnswers,
 } from '@abc/shared';
 import type { RoomRecord, PlayerRecord, AnswerCategory } from '@abc/shared';
 
@@ -188,48 +185,16 @@ export async function startGame(
 
 // ── Scoring helpers ───────────────────────────────────────────────────────────
 
-function isScoreableAnswer(
-  room: RoomRecord,
-  playerId: string,
-  category: AnswerCategory,
-  value: string,
-): boolean {
-  const override = room.answerOverrides?.[answerReviewKey(playerId, category)];
-  if (override === true) return true;
-  if (override === false) return false;
-  if (isObviousGarbageAnswer(value)) return false;
-  return isValidCategoryAnswer(category, value, room.currentLetter ?? '');
-}
-
 async function scoreRound(
   roomId: string,
   room: RoomRecord,
   players: (PlayerRecord & { id: string })[],
 ): Promise<void> {
-  const targetLetter = (room.currentLetter ?? '').toUpperCase();
-
-  // Count how many players have each normalised answer
-  const counts: Record<string, number> = {};
-  for (const key of ANSWER_KEYS) {
-    for (const p of players) {
-      const raw = (p.answers?.[key] ?? '').trim();
-      if (!raw || raw[0]?.toUpperCase() !== targetLetter) continue;
-      if (!isScoreableAnswer(room, p.id, key, raw)) continue;
-      const norm = `${key}:${normalizeAnswer(raw)}`;
-      counts[norm] = (counts[norm] ?? 0) + 1;
-    }
-  }
+  const roundScores = scoreRoundAnswers(room, players, pointsForCount);
 
   const batch = writeBatch(db);
   for (const p of players) {
-    let roundScore = 0;
-    for (const key of ANSWER_KEYS) {
-      const raw = (p.answers?.[key] ?? '').trim();
-      if (!raw || raw[0]?.toUpperCase() !== targetLetter) continue;
-      if (!isScoreableAnswer(room, p.id, key, raw)) continue;
-      const sharedCount = counts[`${key}:${normalizeAnswer(raw)}`] ?? 1;
-      roundScore += pointsForCount(sharedCount);
-    }
+    const roundScore = roundScores[p.id] ?? 0;
     const prevRoundScore = p.scoredRound === room.roundNumber ? (p.roundScore ?? 0) : 0;
     const totalScore = Math.max(0, (p.score ?? 0) - prevRoundScore + roundScore);
     batch.update(doc(db, 'rooms', roomId, 'players', p.id), {

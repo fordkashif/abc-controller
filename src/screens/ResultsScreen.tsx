@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { RoomRecord, PlayerRecord, AnswerCategory } from '@abc/shared';
-import { ANSWER_KEYS, CATEGORY_LABELS } from '@abc/shared';
+import { ANSWER_KEYS, CATEGORY_LABELS, reviewAnswer } from '@abc/shared';
 import {
   controllerLogo as gameplayLogo,
   controllerDecorMain as bubbleLg,
@@ -76,16 +76,7 @@ function RankBadge({ rank }: { rank: number }) {
 }
 
 function getAnswerReviewState(room: RoomRecord, playerId: string, category: AnswerCategory, rawAnswer: string) {
-  const answer = rawAnswer.trim();
-  if (!answer) return { label: 'Blank', tone: 'blank' as const, valid: false };
-
-  const override = room.answerOverrides?.[`${playerId}:${category}`];
-  if (override === true) return { label: 'Accepted', tone: 'accepted' as const, valid: true };
-  if (override === false) return { label: 'Rejected', tone: 'rejected' as const, valid: false };
-
-  const startsRight = answer[0]?.toUpperCase() === room.currentLetter.toUpperCase();
-  if (!startsRight) return { label: 'Wrong letter', tone: 'rejected' as const, valid: false };
-  return { label: 'Accepted', tone: 'accepted' as const, valid: true };
+  return reviewAnswer(room, playerId, category, rawAnswer);
 }
 
 export default function ResultsScreen({ room, players, userId, isDealer, onApprove, onAdvance }: Props) {
