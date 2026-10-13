@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { useRoundCues } from '../hooks/useDeviceFeedback';
 import { requestRoundClose, saveDraftAnswers, submitAnswers } from '../firebase/roomActions';
 import type { RoomRecord, PlayerRecord } from '@abc/shared';
 import { ANSWER_KEYS, CATEGORY_LABELS, answersForRound, roundTiming, serverNow } from '@abc/shared';
@@ -107,6 +108,11 @@ export default function PlayScreen({
   const timing = roundTiming(room, serverNow());
   const countdownLeft = timing.countdownLeft;
   const isCountdown = timing.phase === 'countdown';
+  const inputRefs = useRef<Array<HTMLInputElement | null>>([]);
+
+  // Buzz at round start, 10 seconds left and time up. Skipped once this
+  // player has submitted so they aren't nagged while they wait.
+  useRoundCues(`${roomId}:${room.roundNumber}`, timing.phase, timeLeft, !myPlayer?.submitted);
   const isPaused = room.status === 'paused';
   const interactionLocked = isCountdown || isPaused || !!myPlayer?.submitted;
 
@@ -357,14 +363,25 @@ export default function PlayScreen({
             }}
           >
             <div className="controller-play-answer-list">
-              {ANSWER_KEYS.map(key => {
+              {ANSWER_KEYS.map((key, index) => {
                 const value = answers[key] ?? '';
+                const isLast = index === ANSWER_KEYS.length - 1;
                 return (
                   <label key={key} className={`controller-play-row ${value.trim() ? 'filled' : ''}`}>
                     <span className="controller-play-row-label">{CATEGORY_LABELS[key]}</span>
                     <input
+                      ref={el => { inputRefs.current[index] = el; }}
                       className="controller-play-input"
                       value={value}
+                      enterKeyHint={isLast ? 'done' : 'next'}
+                      onKeyDown={event => {
+                        if (event.key !== 'Enter') return;
+                        // Return moves to the next category instead of submitting the form.
+                        // On the last one it closes the keyboard; submitting stays a deliberate tap.
+                        event.preventDefault();
+                        if (isLast) event.currentTarget.blur();
+                        else inputRefs.current[index + 1]?.focus();
+                      }}
                       onChange={event => setAnswers(prev => ({ ...prev, [key]: event.target.value }))}
                       placeholder={`Starts with ${room.currentLetter}...`}
                       maxLength={40}

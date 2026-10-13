@@ -2,6 +2,7 @@ import React, { Suspense, lazy, useEffect, useState } from 'react';
 import { signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 import { auth, db } from './firebase/config';
 import { useRoom } from './hooks/useRoom';
+import { useWakeLock } from './hooks/useDeviceFeedback';
 import {
   updateHeartbeat, leaveRoom, leaveActiveGame, startGame,
   requestRoundClose, approveAnswer, advanceRound, joinRoom,
@@ -327,6 +328,10 @@ export default function App() {
     }
     await pauseRound(roomId, room);
   }
+
+  // Keep the screen on from the lobby through the final scores, so phones
+  // don't dim or lock between rounds.
+  useWakeLock(['lobby', 'playing', 'submitted', 'results'].includes(phase));
 
   const isReconnecting = !!roomId && (!roomLoaded || !playersLoaded || (!!room && !players.some(player => player.id === userId)));
   const connectionBanner = !browserOnline
