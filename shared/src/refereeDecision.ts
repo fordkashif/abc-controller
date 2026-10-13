@@ -36,9 +36,19 @@ function joinOrder(a: RefereePlayer, b: RefereePlayer) {
  * tested and so the TV and the fallback dealer phone always agree.
  */
 export function decideRefereeAction({ room, players, nowMs, shortHandedSinceMs }: DecisionInput): RefereeAction {
-  if (!IN_GAME.has(room.status)) return { type: 'none' };
-
   const active = activePlayersOf(players, nowMs);
+
+  // In the lobby the dealer starts the game, so someone who is actually here
+  // must hold the role. New rooms start with no dealer (or, in rooms created
+  // before this fix, the TV's id), so the first player to join gets it.
+  if (room.status === 'waiting') {
+    if (active.length > 0 && !active.some(p => p.id === room.currentDealerId)) {
+      return { type: 'reassignDealer', dealerId: [...active].sort(joinOrder)[0].id };
+    }
+    return { type: 'none' };
+  }
+
+  if (!IN_GAME.has(room.status)) return { type: 'none' };
 
   if (active.length < 2) {
     if (shortHandedSinceMs !== null && nowMs - shortHandedSinceMs >= SHORT_HANDED_END_MS) {
