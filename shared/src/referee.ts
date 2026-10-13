@@ -7,7 +7,7 @@ import {
   serverTimestamp,
   type Firestore,
 } from 'firebase/firestore';
-import { isClockSynced, serverNow } from './clock';
+import { clockSyncStats, getServerOffset, isClockSynced, serverNow } from './clock';
 import { chooseCallSpeed, stopLetterCall } from './letterCall';
 import { pointsForCount } from './constants';
 import { activePlayersOf } from './presence';
@@ -144,6 +144,41 @@ type RefereeOptions = {
 };
 
 /** Runs the room: ends rounds on time, scores them, replaces a missing dealer, ends abandoned games. */
+/** A referee step that hasn't finished after this long is abandoned, so the referee can't freeze. */
+const ACTION_TIMEOUT_MS = 20_000;
+
+/** If the clock never syncs (e.g. the read-back keeps failing), referee on this device's clock after this long. */
+const CLOCK_WAIT_MS = 15_000;
+
+/** What the referee saw on its last tick, readable from the console (and by the play test) as window.__abcReferee. */
+type RefereeDebug = {
+  at: number;
+  enabled: boolean;
+  synced: boolean;
+  offsetMs: number;
+  clock: typeof clockSyncStats;
+  busy: boolean;
+  skipped?: string;
+  decision?: string;
+  lastAction?: string;
+  lastError?: string;
+};
+
+function setDebug(update: Partial<RefereeDebug>) {
+  const w = globalThis as typeof globalThis & { __abcReferee?: RefereeDebug };
+  w.__abcReferee = { ...(w.__abcReferee ?? ({} as RefereeDebug)), ...update, at: Date.now() };
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${label} took longer than ${ms / 1000}s`)), ms);
+    promise.then(
+      value => { clearTimeout(timer); resolve(value); },
+      error => { clearTimeout(timer); reject(error); },
+    );
+  });
+}
+
 export function useReferee({ db, roomId, room, players, enabled, selfId }: RefereeOptions) {
   const latest = useRef({ room, players });
   latest.current = { room, players };
@@ -153,15 +188,24 @@ export function useReferee({ db, roomId, room, players, enabled, selfId }: Refer
   useEffect(() => {
     if (!enabled || !roomId) {
       shortHandedSince.current = null;
+      setDebug({ enabled: false });
       return;
     }
+    const enabledAt = Date.now();
 
     async function tick() {
       const current = latest.current;
-      if (busy.current || !current.room || !roomId) return;
+      setDebug({ enabled: true, synced: isClockSynced(), offsetMs: getServerOffset(), clock: { ...clockSyncStats }, busy: busy.current, skipped: undefined });
+      if (busy.current || !current.room || !roomId) {
+        setDebug({ skipped: busy.current ? 'busy' : 'no room' });
+        return;
+      }
       // A device whose clock is off would end rounds early or think everyone
-      // left, so wait until the first clock sync has come back.
-      if (!isClockSynced()) return;
+      // left, so wait for the first clock sync, but not forever.
+      if (!isClockSynced() && Date.now() - enabledAt < CLOCK_WAIT_MS) {
+        setDebug({ skipped: 'waiting for clock sync' });
+        return;
+      }
 
       const nowMs = serverNow();
       const activeCount = activePlayersOf(current.players, nowMs, selfId).length;
@@ -178,14 +222,18 @@ export function useReferee({ db, roomId, room, players, enabled, selfId }: Refer
         shortHandedSinceMs: shortHandedSince.current,
         selfId,
       });
+      setDebug({ decision: action.type });
       if (action.type === 'none') return;
       if (selfId && action.type === 'reassignDealer' && action.dealerId !== selfId) return;
 
       busy.current = true;
+      setDebug({ lastAction: `${action.type} started` });
       try {
-        await runAction(db, roomId, current.room, action);
+        await withTimeout(runAction(db, roomId, current.room, action), ACTION_TIMEOUT_MS, action.type);
+        setDebug({ lastAction: `${action.type} done` });
       } catch (error) {
         console.warn('[referee]', action.type, error);
+        setDebug({ lastAction: `${action.type} failed`, lastError: String((error as Error)?.message ?? error).slice(0, 200) });
       } finally {
         busy.current = false;
       }
