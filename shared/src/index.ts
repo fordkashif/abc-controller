@@ -1,5 +1,6 @@
 export * from './answerValidation';
 export * from './letterSelector';
+export * from './letterCall';
 export * from './constants';
 export * from './scoring';
 export * from './clock';

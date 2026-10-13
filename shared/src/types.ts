@@ -1,9 +1,11 @@
 import type { AnswerCategory } from './answerValidation';
+import type { LetterCall } from './letterCall';
 
 /** Firestore timestamp shape, kept structural so both apps can share it without importing firebase here. */
 export type TimestampLike = { toMillis: () => number };
 
-export type RoomStatus = 'waiting' | 'playing' | 'paused' | 'round_ended' | 'finished';
+/** calling: the dealer is running the hidden alphabet and players race to hit STOP. */
+export type RoomStatus = 'waiting' | 'calling' | 'playing' | 'paused' | 'round_ended' | 'finished';
 
 export type RoomRecord = {
   code: string;
@@ -22,6 +24,8 @@ export type RoomRecord = {
   createdAt?: TimestampLike;
   /** The TV's heartbeat. While fresh, the TV referees the room; otherwise the dealer's phone does. */
   hostSeenAt?: TimestampLike | null;
+  /** The fast-or-slow call that picks this round's letter. */
+  letterCall?: LetterCall;
 };
 
 export type Answers = Record<AnswerCategory, string>;

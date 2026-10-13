@@ -1,3 +1,4 @@
+import { AUTO_SPEED_MS, AUTO_STOP_MS } from './letterCall';
 import { activePlayersOf } from './presence';
 import { roundTiming } from './timing';
 import type { PlayerRecord, RoomRecord } from './types';
@@ -13,7 +14,9 @@ export type RefereeAction =
   | { type: 'endGame' }
   | { type: 'reassignDealer'; dealerId: string }
   | { type: 'requestClose' }
-  | { type: 'finalize' };
+  | { type: 'finalize' }
+  | { type: 'autoStop' }
+  | { type: 'autoSpeed' };
 
 export type RefereePlayer = PlayerRecord & { id: string };
 
@@ -23,9 +26,11 @@ type DecisionInput = {
   nowMs: number;
   /** Server time when the room first dropped below two active players, or null. */
   shortHandedSinceMs: number | null;
+  /** The device running the referee, if it is a phone. It always counts itself as connected. */
+  selfId?: string | null;
 };
 
-const IN_GAME = new Set(['playing', 'paused', 'round_ended']);
+const IN_GAME = new Set(['calling', 'playing', 'paused', 'round_ended']);
 
 function joinOrder(a: RefereePlayer, b: RefereePlayer) {
   return (a.joinedAt?.toMillis?.() ?? 0) - (b.joinedAt?.toMillis?.() ?? 0);
@@ -35,8 +40,8 @@ function joinOrder(a: RefereePlayer, b: RefereePlayer) {
  * Decides the one thing the referee should do next. Pure, so it can be
  * tested and so the TV and the fallback dealer phone always agree.
  */
-export function decideRefereeAction({ room, players, nowMs, shortHandedSinceMs }: DecisionInput): RefereeAction {
-  const active = activePlayersOf(players, nowMs);
+export function decideRefereeAction({ room, players, nowMs, shortHandedSinceMs, selfId }: DecisionInput): RefereeAction {
+  const active = activePlayersOf(players, nowMs, selfId);
 
   // In the lobby the dealer starts the game, so someone who is actually here
   // must hold the role. New rooms start with no dealer (or, in rooms created
@@ -58,6 +63,21 @@ export function decideRefereeAction({ room, players, nowMs, shortHandedSinceMs }
 
   if (active.length > 0 && !active.some(p => p.id === room.currentDealerId)) {
     return { type: 'reassignDealer', dealerId: [...active].sort(joinOrder)[0].id };
+  }
+
+  // Nobody hit STOP: stop the alphabet wherever it is so the game keeps moving.
+  if (room.status === 'calling') {
+    const call = room.letterCall;
+    // The dealer is here but hasn't picked fast or slow: pick for them.
+    const sinceMs = call?.callingSince?.toMillis?.();
+    if (!call?.speed && sinceMs !== undefined && nowMs - sinceMs >= AUTO_SPEED_MS) {
+      return { type: 'autoSpeed' };
+    }
+    const startMs = call?.startedAt?.toMillis?.();
+    if (call?.speed && startMs !== undefined && !call.letter && nowMs - startMs >= AUTO_STOP_MS) {
+      return { type: 'autoStop' };
+    }
+    return { type: 'none' };
   }
 
   if (room.status !== 'playing' || active.length === 0) return { type: 'none' };
