@@ -25,7 +25,14 @@ export function useWakeLock(active: boolean) {
           return;
         }
         sentinel = next;
-        next.addEventListener?.('release', () => { sentinel = null; });
+        next.addEventListener?.('release', () => {
+          sentinel = null;
+          // The system can drop the lock while the page is still showing
+          // (battery saver, a dialog). Ask again shortly after.
+          if (!cancelled && document.visibilityState === 'visible') {
+            window.setTimeout(() => { void acquire(); }, 1_000);
+          }
+        });
       } catch {
         // Denied (low battery, not visible, unsupported). Try again on the next visibility change.
       }
