@@ -1,12 +1,13 @@
 import React, { Suspense, lazy, useEffect, useState } from 'react';
 import { signInAnonymously, onAuthStateChanged } from 'firebase/auth';
-import { auth } from './firebase/config';
+import { auth, db } from './firebase/config';
 import { useRoom } from './hooks/useRoom';
 import {
   updateHeartbeat, leaveRoom, leaveActiveGame, startGame,
-  endRound, approveAnswer, advanceRound, forceEndGame, ensureActiveDealer, joinRoom,
+  requestRoundClose, approveAnswer, advanceRound, joinRoom,
   pauseRound, resumeRound,
 } from './firebase/roomActions';
+import { fallbackRefereeId, isHostActive, serverNow, useReferee } from '@abc/shared';
 import type { RoomRecord, AnswerCategory } from '@abc/shared';
 
 const JoinScreen = lazy(() => import('./screens/JoinScreen'));
@@ -93,6 +94,21 @@ export default function App() {
 
   const isDealer = !!(room && userId && room.currentDealerId === userId);
 
+  // Re-check every few seconds so the dealer notices when the TV goes quiet,
+  // even if no Firestore update arrives to trigger a render.
+  const [, setClockTick] = useState(0);
+  useEffect(() => {
+    const id = window.setInterval(() => setClockTick(t => t + 1), 3_000);
+    return () => window.clearInterval(id);
+  }, []);
+
+  // The TV referees the room. If it closes or loses connection, the dealer's
+  // phone takes over (or the next player, if the dealer is gone too) so
+  // rounds still end and get scored.
+  const hostActive = !!room && isHostActive(room, serverNow());
+  const fallbackId = room ? fallbackRefereeId(room, activePlayers) : null;
+  useReferee({ db, roomId, room, players, enabled: !hostActive && !!userId && fallbackId === userId });
+
   // Anonymous auth on mount
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, user => {
@@ -144,6 +160,7 @@ export default function App() {
   // Presence heartbeat
   useEffect(() => {
     if (!roomId || !userId) return;
+    void updateHeartbeat(roomId, userId); // also syncs this phone's clock right away
     const hb = setInterval(() => updateHeartbeat(roomId, userId), 20_000);
     return () => { clearInterval(hb); };
   }, [roomId, userId]);
@@ -189,21 +206,6 @@ export default function App() {
 
     return () => window.clearTimeout(timeout);
   }, [roomId, userId, room, players, roomLoaded, playersLoaded, browserOnline, silentRejoinAttempted, playerName, avatarId]);
-
-  // Auto-end if player count drops below 2 during an active game
-  useEffect(() => {
-    if (!room || !roomId || !userId) return;
-    if (room.status !== 'playing' && room.status !== 'paused' && room.status !== 'round_ended') return;
-    if (activePlayers.length < 2) {
-      forceEndGame(roomId);
-    }
-  }, [activePlayers.length, room?.status, roomId, userId]);
-
-  useEffect(() => {
-    if (!room || !roomId || activePlayers.length < 1) return;
-    if (activePlayers.some(player => player.id === room.currentDealerId)) return;
-    void ensureActiveDealer(roomId, room, activePlayers);
-  }, [room, roomId, activePlayers]);
 
   // Drive phase from room state
   useEffect(() => {
@@ -303,13 +305,13 @@ export default function App() {
   }
 
   async function doEndRound() {
-    if (!roomId || !room) return;
-    await endRound(roomId, room, activePlayers);
+    if (!roomId) return;
+    await requestRoundClose(roomId);
   }
 
   async function doApprove(playerId: string, category: AnswerCategory, approved: boolean) {
     if (!roomId || !room) return;
-    await approveAnswer(roomId, room, activePlayers, playerId, category, approved);
+    await approveAnswer(roomId, room, playerId, category, approved);
   }
 
   async function doAdvance() {

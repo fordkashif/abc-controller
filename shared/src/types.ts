@@ -20,6 +20,8 @@ export type RoomRecord = {
   roundCloseRequestedAt?: TimestampLike | null;
   pausedRemainingSec?: number | null;
   createdAt?: TimestampLike;
+  /** The TV's heartbeat. While fresh, the TV referees the room; otherwise the dealer's phone does. */
+  hostSeenAt?: TimestampLike | null;
 };
 
 export type Answers = Record<AnswerCategory, string>;
@@ -41,4 +43,6 @@ export type PlayerRecord = {
   submitted: boolean;
   /** Missing until the player's first round starts. */
   answers?: Answers;
+  /** Round the saved answers belong to. Answers tagged with another round are ignored. */
+  answersRound?: number;
 };
