@@ -147,3 +147,14 @@ test('clock reports synced only after a sample', async () => {
   assert.equal(isClockSynced(), true);
   resetServerClock();
 });
+
+test('lobby: a dealer who is not a player (the TV) is replaced by the first to join', () => {
+  const lobby = room({ status: 'waiting', currentDealerId: 'tv', roundNumber: 0 });
+  assert.deepEqual(
+    decideRefereeAction({ room: lobby, players: [player('c'), player('b')], nowMs: NOW, shortHandedSinceMs: null }),
+    { type: 'reassignDealer', dealerId: 'b' },
+  );
+  assert.equal(decide(room({ status: 'waiting', currentDealerId: '' }), [player('b')]), 'reassignDealer');
+  assert.equal(decide(room({ status: 'waiting', currentDealerId: 'b' }), [player('b')]), 'none');
+  assert.equal(decide(room({ status: 'waiting', currentDealerId: 'tv' }), []), 'none');
+});
