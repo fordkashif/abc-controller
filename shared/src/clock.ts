@@ -10,6 +10,9 @@ import { getDocFromServer, serverTimestamp, updateDoc, type DocumentReference } 
 let offsetMs = 0;
 let samples: { offset: number; rtt: number }[] = [];
 
+/** For diagnostics: how clock syncs have gone on this device. */
+export const clockSyncStats = { attempts: 0, slowSkips: 0, lastError: '' as string, lastRttMs: 0 };
+
 /** Current time on the server's clock, as best this device knows it. */
 export function serverNow(): number {
   return Date.now() + offsetMs;
@@ -48,12 +51,24 @@ export function resetServerClock(): void {
  * existing presence field (lastSeenAt for phones, hostSeenAt for the TV).
  */
 export async function syncServerClock(ref: DocumentReference, field: string): Promise<void> {
-  const before = Date.now();
-  await updateDoc(ref, { [field]: serverTimestamp() });
-  const after = Date.now();
-  // Skip the sample if the network was slow; it would only add noise.
-  if (after - before > 4_000) return;
-  const snap = await getDocFromServer(ref);
-  const value = snap.get(field) as { toMillis?: () => number } | undefined;
-  if (value?.toMillis) recordClockSample(before, after, value.toMillis());
+  clockSyncStats.attempts += 1;
+  try {
+    const before = Date.now();
+    await updateDoc(ref, { [field]: serverTimestamp() });
+    const after = Date.now();
+    clockSyncStats.lastRttMs = after - before;
+    // Skip the sample if the network was slow; it would only add noise.
+    // The first sample is always kept, so a slow connection still gets synced.
+    if (after - before > 4_000 && samples.length > 0) {
+      clockSyncStats.slowSkips += 1;
+      return;
+    }
+    const snap = await getDocFromServer(ref);
+    const value = snap.get(field) as { toMillis?: () => number } | undefined;
+    if (value?.toMillis) recordClockSample(before, after, value.toMillis());
+    else clockSyncStats.lastError = `no ${field} timestamp on read-back`;
+  } catch (error) {
+    clockSyncStats.lastError = String((error as Error)?.message ?? error).slice(0, 160);
+    throw error;
+  }
 }
