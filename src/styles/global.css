@@ -5247,3 +5247,9 @@ body {
   from { transform: scale(.9) rotate(-3deg); }
   to   { transform: scale(1) rotate(0); }
 }
+.calling-back {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 3;
+}

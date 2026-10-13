@@ -109,7 +109,7 @@ export default function App() {
   // rounds still end and get scored.
   const hostActive = !!room && isHostActive(room, serverNow());
   const fallbackId = room ? fallbackRefereeId(room, activePlayers) : null;
-  useReferee({ db, roomId, room, players, enabled: !hostActive && !!userId && fallbackId === userId });
+  useReferee({ db, roomId, room, players, enabled: !hostActive && !!userId && fallbackId === userId, selfId: userId });
 
   // Anonymous auth on mount
   useEffect(() => {
@@ -416,6 +416,7 @@ export default function App() {
         userId={userId}
         players={activePlayers}
         isDealer={isDealer}
+        onLeaveGame={handleLeaveCurrentGame}
       />
     );
   }

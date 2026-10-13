@@ -18,6 +18,8 @@ export type LetterCall = {
   /** Player id that hit STOP, or 'auto' if nobody did in time. */
   stoppedBy: string | null;
   letter: string | null;
+  /** Server time this round's call began, so a dealer who never picks a speed can be skipped. */
+  callingSince?: TimestampLike | null;
 };
 
 export const EMPTY_LETTER_CALL: LetterCall = { speed: null, startedAt: null, stoppedBy: null, letter: null };
@@ -30,6 +32,9 @@ export const CALL_LEAD_MS = 1_500;
 
 /** If nobody hits STOP this long after the alphabet starts, the referee stops it. */
 export const AUTO_STOP_MS = 20_000;
+
+/** If the dealer hasn't picked fast or slow this long after the call began, the referee picks for them. */
+export const AUTO_SPEED_MS = 20_000;
 
 /** Time between STOP and answers unlocking: the reveal plus the usual countdown. */
 export const REVEAL_MS = 1_500 + ROUND_COUNTDOWN_MS;
@@ -73,6 +78,7 @@ export async function chooseCallSpeed(db: Firestore, roomId: string, roundNumber
     tx.update(roomRef, {
       letterCall: {
         ...EMPTY_LETTER_CALL,
+        callingSince: room.letterCall?.callingSince ?? null,
         speed,
         startedAt: Timestamp.fromMillis(serverNow() + CALL_LEAD_MS),
       },

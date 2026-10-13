@@ -8,7 +8,7 @@ import {
   type Firestore,
 } from 'firebase/firestore';
 import { isClockSynced, serverNow } from './clock';
-import { stopLetterCall } from './letterCall';
+import { chooseCallSpeed, stopLetterCall } from './letterCall';
 import { pointsForCount } from './constants';
 import { activePlayersOf } from './presence';
 import { answersForRound, decideRefereeAction, type RefereeAction, type RefereePlayer } from './refereeDecision';
@@ -115,6 +115,10 @@ async function runAction(db: Firestore, roomId: string, room: RoomRecord, action
       });
       return;
 
+    case 'autoSpeed':
+      await chooseCallSpeed(db, roomId, room.roundNumber, Math.random() < 0.5 ? 'fast' : 'slow');
+      return;
+
     case 'autoStop':
       await stopLetterCall(db, roomId, room.roundNumber, 'auto', serverNow());
       return;
@@ -131,10 +135,16 @@ type RefereeOptions = {
   players: RefereePlayer[];
   /** The TV passes true. A phone passes true only while it is the dealer and the TV has gone quiet. */
   enabled: boolean;
+  /**
+   * Set when a phone is refereeing. It counts itself as connected, and it only
+   * ever gives the dealer role to itself (the rules don't let a player hand the
+   * role to someone else; the TV can).
+   */
+  selfId?: string | null;
 };
 
 /** Runs the room: ends rounds on time, scores them, replaces a missing dealer, ends abandoned games. */
-export function useReferee({ db, roomId, room, players, enabled }: RefereeOptions) {
+export function useReferee({ db, roomId, room, players, enabled, selfId }: RefereeOptions) {
   const latest = useRef({ room, players });
   latest.current = { room, players };
   const busy = useRef(false);
@@ -154,7 +164,7 @@ export function useReferee({ db, roomId, room, players, enabled }: RefereeOption
       if (!isClockSynced()) return;
 
       const nowMs = serverNow();
-      const activeCount = activePlayersOf(current.players, nowMs).length;
+      const activeCount = activePlayersOf(current.players, nowMs, selfId).length;
       if (activeCount >= 2 || !['calling', 'playing', 'paused', 'round_ended'].includes(current.room.status)) {
         shortHandedSince.current = null;
       } else if (shortHandedSince.current === null) {
@@ -166,8 +176,10 @@ export function useReferee({ db, roomId, room, players, enabled }: RefereeOption
         players: current.players,
         nowMs,
         shortHandedSinceMs: shortHandedSince.current,
+        selfId,
       });
       if (action.type === 'none') return;
+      if (selfId && action.type === 'reassignDealer' && action.dealerId !== selfId) return;
 
       busy.current = true;
       try {
@@ -181,5 +193,5 @@ export function useReferee({ db, roomId, room, players, enabled }: RefereeOption
 
     const id = window.setInterval(() => { void tick(); }, 500);
     return () => window.clearInterval(id);
-  }, [db, roomId, enabled]);
+  }, [db, roomId, enabled, selfId]);
 }

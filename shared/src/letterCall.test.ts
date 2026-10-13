@@ -76,3 +76,21 @@ test('a missing dealer is replaced while calling', () => {
   const room = { ...calling(EMPTY_LETTER_CALL), currentDealerId: 'gone' };
   assert.equal(decide(room, START), 'reassignDealer');
 });
+
+test('referee picks a speed if the dealer never does', async () => {
+  const { AUTO_SPEED_MS } = await import('./letterCall');
+  const waiting = calling({ ...EMPTY_LETTER_CALL, callingSince: at(START) });
+  assert.equal(decide(waiting, START + AUTO_SPEED_MS - 1), 'none');
+  assert.equal(decide(waiting, START + AUTO_SPEED_MS), 'autoSpeed');
+  // Rooms from before callingSince existed are left to the dealer.
+  assert.equal(decide(calling(EMPTY_LETTER_CALL), START + 10 * AUTO_SPEED_MS), 'none');
+});
+
+test('a refereeing phone counts itself as connected', () => {
+  const stale = players.map(p => (p.id === 'a' ? { ...p, lastSeenAt: at(START - 200_000) } : p));
+  const room = calling(EMPTY_LETTER_CALL);
+  // Seen from elsewhere, the dealer looks gone...
+  assert.equal(decideRefereeAction({ room, players: stale, nowMs: START, shortHandedSinceMs: null }).type, 'reassignDealer');
+  // ...but the dealer's own phone knows it is here.
+  assert.equal(decideRefereeAction({ room, players: stale, nowMs: START, shortHandedSinceMs: null, selfId: 'a' }).type, 'none');
+});
